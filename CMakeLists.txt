@@ -4,6 +4,8 @@ enable_language(CXX)
 enable_language(C)
 find_package(Git)
 
+set(CMAKE_EXPORT_COMPILECOMMANDS ON)
+
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/pingcap/rocksdb.git")
 endif()
