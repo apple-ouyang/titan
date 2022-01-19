@@ -107,6 +107,13 @@ void FeatureSample::IndexFeatures(SuperFeaturesSet *sfs) {
   }
 }
 
+SuperFeaturesSet FeatureSample::GenerateFeatures(const rocksdb::Slice &value){
+  this->OdessResemblanceDetect(value);
+  SuperFeaturesSet sfs;
+  IndexFeatures(&sfs);
+  return sfs;
+}
+
 uint64_t FeatureSample::rand_nums[256] = {
     0xb088d3a9e840f559, 0x5652c7f739ed20d6, 0x45b28969898972ab,
     0x6b0a89d5b68ec777, 0x368f573e8b7a31b7, 0x1dc636dce936d94b,
