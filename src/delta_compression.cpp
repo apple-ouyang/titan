@@ -60,6 +60,59 @@
 #include <cstdint>
 #include <random>
 
+FeatureIndexTable feature_idx_tbl;
+
+void FeatureIndexTable::DeleteKeyFromSuperFeatureSet(
+    const rocksdb::Slice &key, const SuperFeaturesSet &sfs) {
+  for (const auto &sf : sfs.super_features) {
+    assert(feature_key_tbl.find(sf) != feature_key_tbl.end());
+
+    // 遍历单链表，找到对应的索引删除
+    for (auto it = feature_key_tbl[sf].before_begin();
+         it != feature_key_tbl[sf].end();) {
+      auto nex = next(it);
+      if (*nex == key) {
+        feature_key_tbl[sf].erase_after(it);
+        break;
+      }
+      it = nex;
+    }
+
+    feature_key_tbl.erase(sf);
+  }
+}
+
+void FeatureIndexTable::Delete(const rocksdb::Slice &key) {
+  SuperFeaturesSet sfs = key_feature_tbl.at(key);
+  DeleteKeyFromSuperFeatureSet(key, sfs);
+  key_feature_tbl.erase(key);
+}
+
+void FeatureIndexTable::RangeDelete(const rocksdb::Slice &start,
+                                    const rocksdb::Slice &end) {
+  auto it_start = key_feature_tbl.find(start);
+  auto it_end = key_feature_tbl.find(end);
+  for (auto it = it_start; it != it_end; ++it) {
+    DeleteKeyFromSuperFeatureSet(it->first, it->second);
+  }
+  key_feature_tbl.erase(it_start, it_end);
+}
+
+
+void FeatureIndexTable::Put(const rocksdb::Slice &key,
+                            const rocksdb::Slice &value) {
+  if (IsKeyExist(key)) {
+    Delete(key);
+  }
+
+  FeatureSample fs;
+  auto sfs = fs.GenerateFeatures(value);
+  key_feature_tbl[key] = sfs;
+  for(const auto & sf:sfs.super_features){
+    feature_key_tbl[sf].push_front(key);
+  }
+}
+
 FeatureSample::FeatureSample(uint8_t features_num)
     : features_num_(features_num) {
   std::random_device rd;
@@ -107,7 +160,7 @@ void FeatureSample::IndexFeatures(SuperFeaturesSet *sfs) {
   }
 }
 
-SuperFeaturesSet FeatureSample::GenerateFeatures(const rocksdb::Slice &value){
+SuperFeaturesSet FeatureSample::GenerateFeatures(const rocksdb::Slice &value) {
   this->OdessResemblanceDetect(value);
   SuperFeaturesSet sfs;
   IndexFeatures(&sfs);

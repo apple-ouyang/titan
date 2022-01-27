@@ -23,6 +23,7 @@
 #include "util/autovector.h"
 #include "util/mutexlock.h"
 #include "util/threadpool_imp.h"
+#include "delta_compression.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -564,6 +565,7 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
                         rocksdb::ColumnFamilyHandle* column_family,
                         const rocksdb::Slice& key,
                         const rocksdb::Slice& value) {
+  feature_idx_tbl.Put(key, value);
   return HasBGError() ? GetBGError()
                       : db_->Put(options, column_family, key, value);
 }
@@ -582,6 +584,7 @@ Status TitanDBImpl::MultiBatchWrite(const WriteOptions& options,
 Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
                            rocksdb::ColumnFamilyHandle* column_family,
                            const rocksdb::Slice& key) {
+  feature_idx_tbl.Delete(key);
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 

@@ -76,46 +76,32 @@
 
 typedef rocksdb::XXH64_hash_t super_feature_t;
 
-class FeatureIndexTable{
-  public:
-  bool IsHaveSimilar(super_feature_t sf){
-    return !this->feature_key_tbl[sf].empty();
-  }
-
-  void Insert(super_feature_t sf, const rocksdb::Slice & key){
-    feature_key_tbl[sf].push_front(key);
-  }
-
-  // 遍历单链表，找到对应的索引删除
-  void Delete(const rocksdb::Slice & key){
-    super_feature_t sf = key_feature_tbl[key];
-    for(auto it = feature_key_tbl[sf].before_begin(); it != feature_key_tbl[sf].end(); ){
-      auto nex = next(it);
-      if(*nex == key){
-        feature_key_tbl[sf].erase_after(it);
-        break;
-      }
-      it = nex;
-    }
-    key_feature_tbl.erase(key_feature_tbl.find(key));
-  }
-
-  void DeleteRange(const rocksdb::Slice & start, const rocksdb::Slice & end){
-    
-  }
-
-  private:
-  // TODO:除了链表还有什么高效的结构吗？
-  std::map<super_feature_t, std::forward_list<rocksdb::Slice> > feature_key_tbl;
-  std::map<rocksdb::Slice, super_feature_t> key_feature_tbl;
-};
-
-
-
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
 struct SuperFeaturesSet {
   super_feature_t super_features[NUM_SUPER_FEATURE];
+};
+
+class FeatureIndexTable {
+public:
+  void Put(const rocksdb::Slice &key, const rocksdb::Slice &value);
+
+  // 遍历单链表，找到对应的索引删除
+  void Delete(const rocksdb::Slice &key);
+
+  void RangeDelete(const rocksdb::Slice &start, const rocksdb::Slice &end);
+
+  bool inline IsKeyExist(const rocksdb::Slice &key) {
+    return key_feature_tbl.find(key) != key_feature_tbl.end();
+  }
+
+private:
+  // TODO:除了链表还有什么高效的结构吗？
+  std::map<super_feature_t, std::forward_list<rocksdb::Slice>> feature_key_tbl;
+  std::map<rocksdb::Slice, SuperFeaturesSet> key_feature_tbl;
+
+  void DeleteKeyFromSuperFeatureSet(const rocksdb::Slice &key,
+                                    const SuperFeaturesSet &sfs);
 };
 
 class FeatureSample {
@@ -158,3 +144,6 @@ private:
   uint64_t *transform_args_a_; // random numbers
   uint64_t *transform_args_b_;
 };
+
+// 全局变量： TODO：暂时不知道放哪里
+extern FeatureIndexTable feature_idx_tbl;
