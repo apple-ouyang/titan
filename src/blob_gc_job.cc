@@ -9,6 +9,7 @@
 
 #include "blob_file_size_collector.h"
 #include "titan_logging.h"
+#include "delta_compression.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -196,10 +197,16 @@ Status BlobGCJob::DoRunGC() {
     if (discardable) {
       metrics_.gc_num_keys_overwritten++;
       metrics_.gc_bytes_overwritten += blob_index.blob_handle.size;
+      feature_idx_tbl.Delete(gc_iter->key());
       continue;
     }
 
     last_key_valid = true;
+
+    std::vector<Slice> similar_keys;
+    if(feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys)){
+      //TODO
+    }
 
     // Rewrite entry to new blob file
     if ((!blob_file_handle && !blob_file_builder) ||

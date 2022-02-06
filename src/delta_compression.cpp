@@ -65,7 +65,7 @@ namespace titandb {
 
 FeatureIndexTable feature_idx_tbl;
 
-void FeatureIndexTable::DeleteKeyFromSuperFeatureSet(
+void FeatureIndexTable::DeleteFeaturesOfAKey(
     const rocksdb::Slice &key, const SuperFeaturesSet &sfs) {
   for (const auto &sf : sfs.super_features) {
     assert(feature_key_tbl.find(sf) != feature_key_tbl.end());
@@ -76,18 +76,18 @@ void FeatureIndexTable::DeleteKeyFromSuperFeatureSet(
       auto nex = next(it);
       if (*nex == key) {
         feature_key_tbl[sf].erase_after(it);
+        if(feature_key_tbl[sf].empty())
+          feature_key_tbl.erase(sf);
         break;
       }
       it = nex;
     }
-
-    feature_key_tbl.erase(sf);
   }
 }
 
 void FeatureIndexTable::Delete(const rocksdb::Slice &key) {
   SuperFeaturesSet sfs = key_feature_tbl.at(key);
-  DeleteKeyFromSuperFeatureSet(key, sfs);
+  DeleteFeaturesOfAKey(key, sfs);
   key_feature_tbl.erase(key);
 }
 
@@ -96,7 +96,7 @@ void FeatureIndexTable::RangeDelete(const rocksdb::Slice &start,
   auto it_start = key_feature_tbl.find(start);
   auto it_end = key_feature_tbl.find(end);
   for (auto it = it_start; it != it_end; ++it) {
-    DeleteKeyFromSuperFeatureSet(it->first, it->second);
+    DeleteFeaturesOfAKey(it->first, it->second);
   }
   key_feature_tbl.erase(it_start, it_end);
 }
@@ -119,6 +119,39 @@ Status FeatureIndexTable::Write(rocksdb::WriteBatch *updates) {
   FeatureHandle hd;
   return updates->Iterate(&hd);
 }
+
+bool FeatureIndexTable::FindKeysOfSimilarRecords(const Slice &key, std::vector<Slice> & similar_keys){
+  auto it_feature = key_feature_tbl.find(key);
+  bool find_similar_keys = false;
+  
+  if(it_feature == key_feature_tbl.end()){
+    //TODO：考虑是否可能出现这种情况
+    printf("Attention! key:%s doesn't in similar table!\n", key.data());
+    return false;
+  }
+  
+  auto sfs = it_feature->second;
+
+  for(const auto &sf:sfs.super_features){
+    auto keys = feature_key_tbl.at(sf);
+    
+    for(const auto & similar_key:keys){
+      if(similar_key != key){
+        similar_keys.emplace_back(similar_key);
+        find_similar_keys = true;
+      }
+    }
+  }
+
+  //如果找到相似记录，则将所有相似的记录从相似索引表中删除
+  if(find_similar_keys){
+    for(const auto &k:similar_keys){
+      this->Delete(k);
+    }
+  }
+  return find_similar_keys;
+}
+
 
 FeatureSample::FeatureSample(uint8_t features_num)
     : features_num_(features_num) {

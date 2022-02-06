@@ -65,6 +65,7 @@
 #include <cstdint>
 #include <forward_list>
 #include <map>
+#include <vector>
 
 namespace rocksdb {
 
@@ -99,16 +100,19 @@ public:
 
   Status Write(WriteBatch* updates);
 
-  bool inline IsKeyExist(const Slice &key) {
+ bool inline IsKeyExist(const Slice &key) {
     return key_feature_tbl.find(key) != key_feature_tbl.end();
   }
 
+  bool FindKeysOfSimilarRecords(const Slice &key, std::vector<Slice> & similar_keys);
+  
 private:
   // TODO:除了链表还有什么高效的结构吗？
   std::map<super_feature_t, std::forward_list<Slice>> feature_key_tbl;
   std::map<Slice, SuperFeaturesSet> key_feature_tbl;
 
-  void DeleteKeyFromSuperFeatureSet(const Slice &key,
+  // 删除key对应的特征（默认3个）
+  void DeleteFeaturesOfAKey(const Slice &key,
                                     const SuperFeaturesSet &sfs);
 };
 
