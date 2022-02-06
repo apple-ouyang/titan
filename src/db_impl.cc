@@ -572,6 +572,7 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
 
 Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
                           rocksdb::WriteBatch* updates) {
+  feature_idx_tbl.Write(updates);
   return HasBGError() ? GetBGError() : db_->Write(options, updates);
 }
 

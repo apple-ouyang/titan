@@ -60,10 +60,15 @@
 #include "blob_format.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
+#include "rocksdb/write_batch_base.h"
 #include "util/xxhash.h"
 #include <cstdint>
 #include <forward_list>
 #include <map>
+
+namespace rocksdb {
+
+namespace titandb {
 
 #define NUM_SUPER_FEATURE                                                      \
   3 // Number of super features that each record will have.
@@ -74,7 +79,7 @@
                      // generate feature will be 1/128 of the all sliding window
                      // chunks.
 
-typedef rocksdb::XXH64_hash_t super_feature_t;
+typedef XXH64_hash_t super_feature_t;
 
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
@@ -82,26 +87,41 @@ struct SuperFeaturesSet {
   super_feature_t super_features[NUM_SUPER_FEATURE];
 };
 
+class FeatureHandle;
 class FeatureIndexTable {
 public:
-  void Put(const rocksdb::Slice &key, const rocksdb::Slice &value);
+  void Put(const Slice &key, const Slice &value);
 
   // 遍历单链表，找到对应的索引删除
-  void Delete(const rocksdb::Slice &key);
+  void Delete(const Slice &key);
 
-  void RangeDelete(const rocksdb::Slice &start, const rocksdb::Slice &end);
+  void RangeDelete(const Slice &start, const Slice &end);
 
-  bool inline IsKeyExist(const rocksdb::Slice &key) {
+  Status Write(WriteBatch* updates);
+
+  bool inline IsKeyExist(const Slice &key) {
     return key_feature_tbl.find(key) != key_feature_tbl.end();
   }
 
 private:
   // TODO:除了链表还有什么高效的结构吗？
-  std::map<super_feature_t, std::forward_list<rocksdb::Slice>> feature_key_tbl;
-  std::map<rocksdb::Slice, SuperFeaturesSet> key_feature_tbl;
+  std::map<super_feature_t, std::forward_list<Slice>> feature_key_tbl;
+  std::map<Slice, SuperFeaturesSet> key_feature_tbl;
 
-  void DeleteKeyFromSuperFeatureSet(const rocksdb::Slice &key,
+  void DeleteKeyFromSuperFeatureSet(const Slice &key,
                                     const SuperFeaturesSet &sfs);
+};
+
+class FeatureHandle : public WriteBatch::Handler, public FeatureIndexTable{
+  public:
+  // using FeatureIndexTable::Put
+  virtual void Put(const Slice & key, const Slice & value) override{
+    FeatureIndexTable::Put(key, value);
+  }
+
+  virtual void Delete(const Slice & key) override{
+    FeatureIndexTable::Delete(key);
+  }
 };
 
 class FeatureSample {
@@ -118,7 +138,7 @@ public:
   FeatureSample(uint8_t features_num = 12);
   ~FeatureSample();
 
-  SuperFeaturesSet GenerateFeatures(const rocksdb::Slice &value);
+  SuperFeaturesSet GenerateFeatures(const Slice &value);
 
 private:
   /**
@@ -130,7 +150,7 @@ private:
    * feature. If two value has a same feature, we consider they are similar.
    * @param &value the value of record.
    */
-  void OdessResemblanceDetect(const rocksdb::Slice &value);
+  void OdessResemblanceDetect(const Slice &value);
 
   /**
    * @description: Divide the features into NUM_SUPER_FEATURE groups. Use xxhash
@@ -147,3 +167,6 @@ private:
 
 // 全局变量： TODO：暂时不知道放哪里
 extern FeatureIndexTable feature_idx_tbl;
+
+}
+}

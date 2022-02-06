@@ -60,6 +60,9 @@
 #include <cstdint>
 #include <random>
 
+namespace rocksdb {
+namespace titandb {
+
 FeatureIndexTable feature_idx_tbl;
 
 void FeatureIndexTable::DeleteKeyFromSuperFeatureSet(
@@ -98,7 +101,6 @@ void FeatureIndexTable::RangeDelete(const rocksdb::Slice &start,
   key_feature_tbl.erase(it_start, it_end);
 }
 
-
 void FeatureIndexTable::Put(const rocksdb::Slice &key,
                             const rocksdb::Slice &value) {
   if (IsKeyExist(key)) {
@@ -108,9 +110,14 @@ void FeatureIndexTable::Put(const rocksdb::Slice &key,
   FeatureSample fs;
   auto sfs = fs.GenerateFeatures(value);
   key_feature_tbl[key] = sfs;
-  for(const auto & sf:sfs.super_features){
+  for (const auto &sf : sfs.super_features) {
     feature_key_tbl[sf].push_front(key);
   }
+}
+
+Status FeatureIndexTable::Write(rocksdb::WriteBatch *updates) {
+  FeatureHandle hd;
+  return updates->Iterate(&hd);
 }
 
 FeatureSample::FeatureSample(uint8_t features_num)
@@ -255,3 +262,5 @@ uint64_t FeatureSample::rand_nums[256] = {
     0x18f346f7abc9d394, 0x636dc655d61ad33d, 0xcc8bab4939f7f3f6,
     0x63c7a906c1dd187b,
 };
+} // namespace titandb
+} // namespace rocksdb
