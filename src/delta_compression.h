@@ -105,7 +105,7 @@ public:
 
   Status Write(WriteBatch *updates);
 
-  bool inline IsKeyExist(const Slice &key) { IsKeyExist(key.ToString()); }
+  bool inline IsKeyExist(const Slice &key) { return IsKeyExist(key.ToString()); }
 
   //查找 key 对应的记录相似记录的 similar_keys
   bool FindKeysOfSimilarRecords(const Slice &key, vector<string> &similar_keys);
