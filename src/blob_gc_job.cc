@@ -1,5 +1,8 @@
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
+#include "db_impl.h"
+#include "rocksdb/options.h"
+#include <cstddef>
 #endif
 #include "blob_gc_job.h"
 
@@ -205,7 +208,12 @@ Status BlobGCJob::DoRunGC() {
 
     std::vector<Slice> similar_keys;
     if(feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys)){
-      //TODO
+      const size_t num_similar_records = similar_keys.size();
+      PinnableSlice similar_values[num_similar_records];
+      Status statuses[num_similar_records];
+      base_db_impl_->MultiGet(ReadOptions(),  blob_gc_->column_family_handle(), num_similar_records, similar_keys.data(), similar_values, statuses);
+
+      
     }
 
     // Rewrite entry to new blob file
