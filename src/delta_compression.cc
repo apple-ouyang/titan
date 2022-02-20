@@ -97,8 +97,8 @@ void FeatureIndexTable::Delete(const string &key) {
 void FeatureIndexTable::Delete(const Slice &key) { Delete(key.ToString()); }
 
 void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
-  auto it_start = key_feature_tbl.find(start);
-  auto it_end = key_feature_tbl.find(end);
+  auto it_start = key_feature_tbl.find(start.ToString());
+  auto it_end = key_feature_tbl.find(end.ToString());
   for (auto it = it_start; it != it_end; ++it) {
     DeleteFeaturesOfAKey(it->first, it->second);
   }
@@ -201,20 +201,25 @@ SuperFeaturesSet FeatureSample::GenerateFeatures(const Slice &value) {
   return sfs;
 }
 
-void XdeltaCompress(const Slice &src, const Slice &in, Slice &delta) {
+int XdeltaCompress(const Slice &src, const Slice &in, string &delta) {
   const size_t MAX_OUTPUT = 2 * in.size();
-  uint8_t out[MAX_OUTPUT];
+  uint8_t *out = new uint8_t[MAX_OUTPUT];
   size_t out_size;
-  xd3_encode_memory((uint8_t *)in.data(), in.size(), (uint8_t *)src.data(),
-                    src.size(), out, &out_size, MAX_OUTPUT, 0);
+  int status =
+      xd3_encode_memory((uint8_t *)in.data(), in.size(), (uint8_t *)src.data(),
+                        src.size(), out, &out_size, MAX_OUTPUT, 0);
+  delta.assign((char *)out, out_size);
+  delete[] out;
+  return status;
 }
 
-bool DeltaCompress(const Slice &base, size_t num, const PinnableSlice *values,
-                   std::vector<Slice> &delta, DeltaCompressMethod method) {
+bool DeltaCompress(const Slice &base, size_t num,
+                   const PinnableSlice *similar_values,
+                   std::vector<string> &delta, DeltaCompressMethod method) {
   for (size_t i = 0; i < num; ++i) {
     switch (method) {
     case xdelta: {
-      XdeltaCompress(base, values[i]);
+      XdeltaCompress(base, similar_values[i], delta[i]);
       break;
     }
     case edelta: {

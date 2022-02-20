@@ -5,6 +5,8 @@ enable_language(C)
 find_package(Git)
 
 set(CMAKE_EXPORT_COMPILECOMMANDS ON)
+set(GDELTA ${PROJECT_SOURCE_DIR}/third-party/gdelta/)
+set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
 
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/pingcap/rocksdb.git")
@@ -31,18 +33,21 @@ endif()
 
 get_filename_component(CMAKE_MODULE_PATH "${ROCKSDB_DIR}/cmake/modules/" ABSOLUTE)
 include(cmake/rocksdb_flags.cmake)
+add_subdirectory(${GDELTA})
 
 include_directories(${ROCKSDB_DIR})
 include_directories(${ROCKSDB_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/src)
 include_directories(${PROJECT_SOURCE_DIR}/util)
+include_directories(${XDELTA})
 
 file(GLOB SOURCES src/*.cc)
 file(GLOB TEST_SOURCES src/*test.cc)
 list(REMOVE_ITEM SOURCES ${TEST_SOURCES})
 
 add_library(titan STATIC ${SOURCES} $<TARGET_OBJECTS:titan_build_version>)
+add_library(xdelta STATIC ${XDELTA}/xdelta3.c)
 
 option(WITH_TITAN_TESTS "Build with tests." ON)
 option(WITH_TITAN_TOOLS "Build with tools." ON)
@@ -81,7 +86,9 @@ endif()
 
 set(COMMON_LIBS
   titan
-  rocksdb)
+  rocksdb
+  xdelta
+  gdelta)
 
 if(WITH_ASAN OR WITH_TSAN)
   find_package(Threads)

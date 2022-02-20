@@ -1,0 +1,6 @@
+[submodule "xdelta"]
+	path = third-party/xdelta
+	url = git@github.com:apple-ouyang/xdelta.git
+[submodule "Gdelta"]
+	path = third-party/gdelta
+	url = git@github.com:apple-ouyang/gdelta.git
