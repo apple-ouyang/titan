@@ -63,6 +63,7 @@
 #include "rocksdb/status.h"
 #include "rocksdb/write_batch_base.h"
 #include "util/xxhash.h"
+
 #include <cstdint>
 #include <forward_list>
 #include <map>
@@ -139,9 +140,6 @@ public:
 
 class FeatureSample {
 public:
-  // just 256 random numbers to map from 256 ASCILL characters
-  static uint64_t rand_nums[256];
-
   /**
    * @description: Detect records similarity. Then we can use delta compression
    * to compress the similar values.

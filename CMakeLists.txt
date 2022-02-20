@@ -41,6 +41,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/src)
 include_directories(${PROJECT_SOURCE_DIR}/util)
 include_directories(${XDELTA})
+include_directories(${GDELTA})
 
 file(GLOB SOURCES src/*.cc)
 file(GLOB TEST_SOURCES src/*test.cc)
