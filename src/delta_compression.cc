@@ -56,13 +56,13 @@
  */
 
 #include "delta_compression.h"
-#include "gdelta.h"
-#include "gear-matrix.h"
-#include "util/xxhash.h"
-#include "xdelta3.h"
-
 #include <cstdint>
 #include <random>
+#include "gear-matrix.h"
+#include "util/xxhash.h"
+#include "gdelta.h"
+#include "xdelta3.h"
+#include "edelta.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -234,6 +234,9 @@ bool DeltaCompress(const Slice &base, size_t num, const PinnableSlice *inputs,
       break;
     }
     case edelta: {
+      // TODO：加一个input.empty的处理
+      EDeltaEncode((uint8_t *)inputs[i].data(), inputs[i].size(),
+              (uint8_t *)base.data(), base.size(), buf, (uint32_t *)&buf_len);
       break;
     }
     case gdelta: {

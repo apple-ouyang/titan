@@ -3,10 +3,10 @@ project(titan)
 enable_language(CXX)
 enable_language(C)
 find_package(Git)
-
-set(CMAKE_EXPORT_COMPILECOMMANDS ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(GDELTA ${PROJECT_SOURCE_DIR}/third-party/gdelta/)
 set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
+set(EDELTA ${PROJECT_SOURCE_DIR}/third-party/edelta)
 
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/pingcap/rocksdb.git")
@@ -34,6 +34,7 @@ endif()
 get_filename_component(CMAKE_MODULE_PATH "${ROCKSDB_DIR}/cmake/modules/" ABSOLUTE)
 include(cmake/rocksdb_flags.cmake)
 add_subdirectory(${GDELTA})
+add_subdirectory(${EDELTA})
 
 include_directories(${ROCKSDB_DIR})
 include_directories(${ROCKSDB_DIR}/include)
@@ -41,6 +42,8 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/src)
 include_directories(${PROJECT_SOURCE_DIR}/util)
 include_directories(${XDELTA})
+include_directories(${EDELTA}/src)
+include_directories(${EDELTA}/util)
 include_directories(${GDELTA})
 
 file(GLOB SOURCES src/*.cc)
@@ -89,7 +92,8 @@ set(COMMON_LIBS
   titan
   rocksdb
   xdelta
-  gdelta)
+  gdelta
+  edelta)
 
 if(WITH_ASAN OR WITH_TSAN)
   find_package(Threads)

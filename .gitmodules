@@ -4,3 +4,6 @@
 [submodule "Gdelta"]
 	path = third-party/gdelta
 	url = git@github.com:apple-ouyang/gdelta.git
+[submodule "third-party/edelta"]
+	path = third-party/edelta
+	url = git@github.com:apple-ouyang/edelta.git
