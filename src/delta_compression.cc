@@ -56,13 +56,13 @@
  */
 
 #include "delta_compression.h"
-#include <cstdint>
-#include <random>
+#include "edelta.h"
+#include "gdelta.h"
 #include "gear-matrix.h"
 #include "util/xxhash.h"
-#include "gdelta.h"
 #include "xdelta3.h"
-#include "edelta.h"
+#include <cstdint>
+#include <random>
 
 namespace rocksdb {
 namespace titandb {
@@ -204,53 +204,86 @@ SuperFeaturesSet FeatureSample::GenerateFeatures(const Slice &value) {
   return sfs;
 }
 
-int XdeltaCompress(const Slice &src, const Slice &in, string &delta) {
-  const size_t MAX_OUTPUT = 2 * in.size();
-  uint8_t *out = new uint8_t[MAX_OUTPUT];
-  size_t out_size;
-  int status =
-      xd3_encode_memory((uint8_t *)in.data(), in.size(), (uint8_t *)src.data(),
-                        src.size(), out, &out_size, MAX_OUTPUT, 0);
-  delta.assign((char *)out, out_size);
-  return status;
-}
-
-bool DeltaCompress(const Slice &base, size_t num, const PinnableSlice *inputs,
-                   std::vector<string> &deltas, DeltaCompressMethod method) {
+void DeltaCompressSlices(const Slice &base, size_t num,
+                         const PinnableSlice *inputs,
+                         std::vector<Delta> &deltas, DeltaCompressMethod method,
+                         vector<int> &status) {
   size_t max_input_len = 0;
+  deltas.resize(num);
+  status.resize(num);
   for (size_t i = 0; i < num; ++i) {
     max_input_len = std::max(max_input_len, inputs[i].size());
   }
-  const size_t MAX_BUF_LEN = max_input_len * 2;
-  uint8_t *buf = new uint8_t[MAX_BUF_LEN];
+  // delta.len() may > input.len(), so we make a double size of buf.
+  // So buf should be big enough.
+  const size_t kMaxBufLen = max_input_len * 2;
+  uint8_t *buf = new uint8_t[kMaxBufLen];
   size_t buf_len;
 
   for (size_t i = 0; i < num; ++i) {
     switch (method) {
-    case xdelta: {
-      xd3_encode_memory((uint8_t *)inputs[i].data(), inputs[i].size(),
-                        (uint8_t *)base.data(), base.size(), buf, &buf_len,
-                        MAX_BUF_LEN, 0);
+    case kXDelta: {
+      status[i] = xd3_encode_memory((uint8_t *)inputs[i].data(),
+                                    inputs[i].size(), (uint8_t *)base.data(),
+                                    base.size(), buf, &buf_len, kMaxBufLen, 0);
       break;
     }
-    case edelta: {
+    case kEDelta: {
       // TODO：加一个input.empty的处理
-      EDeltaEncode((uint8_t *)inputs[i].data(), inputs[i].size(),
-              (uint8_t *)base.data(), base.size(), buf, (uint32_t *)&buf_len);
+      status[i] = EDeltaEncode((uint8_t *)inputs[i].data(), inputs[i].size(),
+                               (uint8_t *)base.data(), base.size(), buf,
+                               (uint32_t *)&buf_len);
       break;
     }
-    case gdelta: {
-      gencode((uint8_t *)inputs[i].data(), inputs[i].size(),
-              (uint8_t *)base.data(), base.size(), buf, (uint32_t *)&buf_len);
+    case kGDelta: {
+      status[i] = gencode((uint8_t *)inputs[i].data(), inputs[i].size(),
+                          (uint8_t *)base.data(), base.size(), buf,
+                          (uint32_t *)&buf_len);
       break;
     }
     default:
       break;
     }
-    deltas[i].assign((char *)buf, buf_len);
+    deltas[i].data.assign((char *)buf, buf_len);
+    deltas[i].original_size = inputs[i].size();
   }
   delete[] buf;
-  return true;
+}
+
+DeltaStatus DeltaUncompres(const Slice &base, const Delta *delta,
+                      std::string &output, DeltaCompressMethod method) {
+  // buf.len() should == delta.original_size
+  // In case of error, we reserve double length.
+  const size_t kMaxBufLen = delta->original_size * 2;
+  uint8_t *buf = new uint8_t[kMaxBufLen];
+  size_t buf_len;
+  DeltaStatus s;
+
+  switch (method) {
+  case kXDelta: {
+    s = xd3_decode_memory((uint8_t *)delta->data.data(), delta->data.size(),
+                          (uint8_t *)base.data(), base.size(), buf, &buf_len,
+                          kMaxBufLen, 0);
+    break;
+  }
+  case kEDelta: {
+    // TODO：加一个input.empty的处理
+    s = EDeltaDecode((uint8_t *)delta->data.data(), delta->data.size(),
+                     (uint8_t *)base.data(), base.size(), buf,
+                     (uint32_t *)&buf_len);
+    break;
+  }
+  case kGDelta: {
+    s = gdecode((uint8_t *)delta->data.data(), delta->data.size(),
+                (uint8_t *)base.data(), base.size(), buf, (uint32_t *)&buf_len);
+    break;
+  }
+  default:
+    break;
+  }
+  output.assign((char *)buf, buf_len);
+  delete[] buf;
+  return s;
 }
 
 } // namespace titandb

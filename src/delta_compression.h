@@ -176,10 +176,21 @@ private:
   uint64_t *transform_args_b_;
 };
 
-enum DeltaCompressMethod { xdelta, edelta, gdelta };
+typedef struct{
+  std::string data;
+  size_t original_size;
+} Delta;
 
-bool DeltaCompress(const Slice *base, size_t num, const PinnableSlice *values,
-                   vector<Slice> delta, DeltaCompressMethod method = xdelta);
+enum DeltaCompressMethod { kXDelta, kEDelta, kGDelta };
+typedef int DeltaStatus;
+
+void DeltaCompressSlices(const Slice &base, size_t num,
+                         const PinnableSlice *inputs,
+                         std::vector<Delta> &deltas, DeltaCompressMethod method,
+                         vector<int> &status);
+
+DeltaStatus DeltaUncompres(const Slice &base, const Delta *delta,
+                      std::string &output, DeltaCompressMethod method);
 
 // 全局变量： TODO：暂时不知道放哪里
 extern FeatureIndexTable feature_idx_tbl;
