@@ -1,4 +1,7 @@
 #include "db_impl.h"
+#include "blob_format.h"
+#include "util.h"
+#include <cassert>
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
@@ -565,19 +568,33 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
                         rocksdb::ColumnFamilyHandle* column_family,
                         const rocksdb::Slice& key,
                         const rocksdb::Slice& value) {
-  feature_idx_tbl.Put(key, value);
-  return HasBGError() ? GetBGError()
-                      : db_->Put(options, column_family, key, value);
+  if(HasBGError())
+    return GetBGError();
+  else{
+    Status s = db_->Put(options, column_family, key, value);
+    if(!s.ok()) 
+      return s;
+    feature_idx_tbl.Put(key, value);
+    return s;
+  }
 }
 
 Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
                           rocksdb::WriteBatch* updates) {
-  feature_idx_tbl.Write(updates);
-  return HasBGError() ? GetBGError() : db_->Write(options, updates);
+  if (HasBGError())
+    return GetBGError();
+  else {
+    Status s = db_->Write(options, updates);
+    if (!s.ok())
+      return s;
+    feature_idx_tbl.Write(updates);
+    return s;
+  }
 }
 
 Status TitanDBImpl::MultiBatchWrite(const WriteOptions& options,
                                     std::vector<WriteBatch*>&& updates) {
+                                      //TODO(haitao) 修改
   return HasBGError() ? GetBGError()
                       : db_->MultiBatchWrite(options, std::move(updates));
 }
@@ -622,11 +639,23 @@ Status TitanDBImpl::Get(const ReadOptions& options, ColumnFamilyHandle* handle,
   return GetImpl(ro, handle, key, value);
 }
 
+Status TitanDBImpl::Get(const ReadOptions& options, ColumnFamilyHandle* handle,
+                        const Slice& key, PinnableSlice* value, BlobIndex *return_index) {
+  if (options.snapshot) {
+    return GetImpl(options, handle, key, value, return_index);
+  }
+  ReadOptions ro(options);
+  ManagedSnapshot snapshot(this);
+  ro.snapshot = snapshot.snapshot();
+  return GetImpl(ro, handle, key, value, return_index);
+}
+
 Status TitanDBImpl::GetImpl(const ReadOptions& options,
                             ColumnFamilyHandle* handle, const Slice& key,
-                            PinnableSlice* value) {
+                            PinnableSlice* value, BlobIndex *return_index) {
   Status s;
   bool is_blob_index = false;
+  // TODO(haitao) 确认差量压缩后调用 RocksDB 的 Get 之后，不会影响 is_blob_index
   s = db_impl_->GetImpl(options, handle, key, value, nullptr /*value_found*/,
                         nullptr /*read_callback*/, &is_blob_index);
   if (!s.ok() || !is_blob_index) return s;
@@ -636,6 +665,8 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
 
   BlobIndex index;
   s = index.DecodeFrom(value);
+  if(return_index != nullptr)
+    *return_index = index;
   assert(s.ok());
   if (!s.ok()) return s;
   if (BlobIndex::IsDeletionMarker(index)) {
@@ -649,13 +680,42 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
   auto storage = blob_file_set_->GetBlobStorage(handle->GetID()).lock();
   mutex_.Unlock();
 
+  OwnedSlice decompressed_buffer;
   if (storage) {
-    StopWatch read_sw(env_, statistics(stats_.get()),
+    if(index.type == BlobIndex::kBlobDeltaRecord){
+      BlobRecord base;
+      PinnableSlice base_buffer;
+      BlobDeltaIndex delta_index(index);
+      delta_index.DecodeFromBehindBase(value);
+
+      //TODO(haitao) 这里的统计信息要不要改
+      StopWatch read_sw(env_, statistics(stats_.get()),
                       TITAN_BLOB_FILE_READ_MICROS);
-    s = storage->Get(options, index, &record, &buffer);
-    RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
-    RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
-               index.blob_handle.size);
+      // 读取 base
+      s = storage->Get(options, delta_index.base_index, &base, &base_buffer);
+      if(!s.ok())
+        return s;
+      // 读取差量压缩后的 delta，并用 base 解压缩还原记录
+      s = storage->Get(options, index, &record, &buffer);
+      if(!s.ok())
+        return s;
+      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
+      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
+                index.blob_handle.size);
+      DeltaCompressType type = storage->cf_options().blob_file_delta_compression;
+      
+      s = DeltaUncompress(type, record.value, base.value, &decompressed_buffer);
+      if(!s.ok())
+        return s;
+      record.value = decompressed_buffer;
+    }else{
+      StopWatch read_sw(env_, statistics(stats_.get()),
+                      TITAN_BLOB_FILE_READ_MICROS);
+      s = storage->Get(options, index, &record, &buffer);
+      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
+      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
+                index.blob_handle.size);
+    }
   } else {
     TITAN_LOG_ERROR(db_options_.info_log,
                     "Column family id:%" PRIu32 " not Found.", handle->GetID());

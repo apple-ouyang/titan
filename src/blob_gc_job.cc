@@ -1,7 +1,10 @@
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
+#include "blob_format.h"
 #include "db_impl.h"
+#include "rocksdb/db.h"
 #include "rocksdb/options.h"
+#include <cassert>
 #include <cstddef>
 #endif
 #include "blob_gc_job.h"
@@ -79,7 +82,7 @@ class BlobGCJob::GarbageCollectionWriteCallback : public WriteCallback {
   uint64_t read_bytes_;
 };
 
-BlobGCJob::BlobGCJob(BlobGC* blob_gc, DB* db, port::Mutex* mutex,
+BlobGCJob::BlobGCJob(BlobGC* blob_gc, DB* db, TitanDBImpl* titan, port::Mutex* mutex,
                      const TitanDBOptions& titan_db_options,
                      bool gc_merge_rewrite, Env* env,
                      const EnvOptions& env_options,
@@ -89,6 +92,7 @@ BlobGCJob::BlobGCJob(BlobGC* blob_gc, DB* db, port::Mutex* mutex,
     : blob_gc_(blob_gc),
       base_db_(db),
       base_db_impl_(reinterpret_cast<DBImpl*>(base_db_)),
+      titan_db_impl_(titan),
       mutex_(mutex),
       db_options_(titan_db_options),
       gc_merge_rewrite_(gc_merge_rewrite),
@@ -183,6 +187,7 @@ Status BlobGCJob::DoRunGC() {
     // count read bytes for blob record of gc candidate files
     metrics_.gc_bytes_read += blob_index.blob_handle.size;
 
+    //TODO(haitao) 这个优化真的有用吗？就为了哪些key相同的连续的键？怕是没多少把
     if (!last_key.empty() && !gc_iter->key().compare(last_key)) {
       if (last_key_valid) {
         continue;
@@ -193,11 +198,13 @@ Status BlobGCJob::DoRunGC() {
     }
 
     bool discardable = false;
+    //TODO(haitao) 检查 base 的 ref
     s = DiscardEntry(gc_iter->key(), blob_index, &discardable);
     if (!s.ok()) {
       break;
     }
     if (discardable) {
+      //TODO(haitao) 如果是 delta，需要减 base 的 ref
       metrics_.gc_num_keys_overwritten++;
       metrics_.gc_bytes_overwritten += blob_index.blob_handle.size;
       feature_idx_tbl.Delete(gc_iter->key());
@@ -205,20 +212,6 @@ Status BlobGCJob::DoRunGC() {
     }
 
     last_key_valid = true;
-
-    std::vector<string> similar_keys;
-    if(feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys)){
-      const size_t num_similar_records = similar_keys.size();
-      PinnableSlice similar_values[num_similar_records];
-      vector<Slice> keys(num_similar_records);
-      for(size_t i = 0; i<num_similar_records; ++i){
-        keys[i] = similar_keys[i];
-      }
-      Status statuses[num_similar_records];
-      base_db_impl_->MultiGet(ReadOptions(),  blob_gc_->column_family_handle(), num_similar_records, keys.data(), similar_values, statuses);
-
-      
-    }
 
     // Rewrite entry to new blob file
     if ((!blob_file_handle && !blob_file_builder) ||
@@ -253,6 +246,66 @@ Status BlobGCJob::DoRunGC() {
     // blob index's size is counted in `RewriteValidKeyToLSM`
     metrics_.gc_bytes_written += blob_record.size();
 
+    vector<Slice> similar_keys;
+    size_t valid_delta_number = 0;
+    feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
+
+    if (similar_keys.size() > 0) {
+      DeltaCompressType type =
+          blob_gc_->titan_cf_options().blob_file_delta_compression;
+
+      // TODO(haitao) 考虑把下面这个 for
+      // 循环封装成一个函数。不过要先考虑能不能解决最小最大键顺序排序的问题
+      for (size_t i = 0; i < similar_keys.size(); ++i){
+        PinnableSlice value;
+        BlobIndex index;
+        BlobRecord delta_record;
+
+        s = titan_db_impl_->Get(ReadOptions(), blob_gc_->column_family_handle(), similar_keys[i], &value, &index);
+        if(!s.ok()) //TODO(haitao) 写个log
+          continue;
+        
+        assert(index.type != BlobIndex::Type::kBlobDeltaRecord); //TODO(haitao) 写个log
+
+        string delta;
+        // count written bytes for new blob record,
+        // blob index's size is counted in `RewriteValidKeyToLSM`
+        metrics_.gc_bytes_written +=
+            value.size() + similar_keys[i].size();
+
+
+        bool good_compress = DeltaCompress(type, value, blob_record.value, &delta);
+        if (!good_compress) //TODO(haitao) 写个log
+          continue;
+
+        ++valid_delta_number;
+        delta_record.key = similar_keys[i];
+        delta_record.value = Slice(delta);
+
+        // BlobRecordContext require key to be an internal key. We encode key
+        // to internal key in spite we only need the user key.
+        std::unique_ptr<BlobFileBuilder::BlobRecordContext> delta_ctx(
+            new BlobFileBuilder::BlobRecordContext);
+        InternalKey delta_ikey(delta_record.key, 1, kTypeValue);
+        // TODO(haitao) 为什么这里是kTypeValue？搞不清楚
+
+        delta_ctx->key = delta_ikey.Encode().ToString();
+        delta_ctx->original_blob_index = index;
+        delta_ctx->new_blob_index.file_number = blob_file_handle->GetNumber();
+        delta_ctx->index_type = BlobIndex::Type::kBlobDeltaRecord;
+        delta_ctx->base_index = blob_index;
+
+        BlobFileBuilder::OutContexts delta_contexts;
+        blob_file_builder->Add(delta_record, std::move(delta_ctx),
+                                &delta_contexts);
+
+        BatchWriteNewIndices(delta_contexts, &s);
+
+        //将成功压缩好的记录从相似索引表中删除，保证后续不再进行差量压缩
+        feature_idx_tbl.Delete(similar_keys[i]);
+      }
+    }
+
     // BlobRecordContext require key to be an internal key. We encode key to
     // internal key in spite we only need the user key.
     std::unique_ptr<BlobFileBuilder::BlobRecordContext> ctx(
@@ -261,6 +314,10 @@ Status BlobGCJob::DoRunGC() {
     ctx->key = ikey.Encode().ToString();
     ctx->original_blob_index = blob_index;
     ctx->new_blob_index.file_number = blob_file_handle->GetNumber();
+    if (valid_delta_number > 0){
+      ctx->index_type = BlobIndex::Type::kBlobBaseRecord;
+      ctx->base_reference = valid_delta_number; //TODO(haitao) 修改 BaseIndex 带来的 ref 写入
+    }
 
     BlobFileBuilder::OutContexts contexts;
     blob_file_builder->Add(blob_record, std::move(ctx), &contexts);
@@ -293,13 +350,6 @@ void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
   auto* cfh = blob_gc_->column_family_handle();
   for (const std::unique_ptr<BlobFileBuilder::BlobRecordContext>& ctx :
        contexts) {
-    MergeBlobIndex merge_blob_index;
-    merge_blob_index.file_number = ctx->new_blob_index.file_number;
-    merge_blob_index.source_file_number = ctx->original_blob_index.file_number;
-    merge_blob_index.source_file_offset =
-        ctx->original_blob_index.blob_handle.offset;
-    merge_blob_index.blob_handle = ctx->new_blob_index.blob_handle;
-
     std::string index_entry;
     BlobIndex original_index = ctx->original_blob_index;
     ParsedInternalKey ikey;
@@ -308,7 +358,27 @@ void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
       return;
     }
     if (!gc_merge_rewrite_) {
-      merge_blob_index.EncodeToBase(&index_entry);
+      const BlobIndex &index = ctx->new_blob_index;
+      switch (ctx->index_type) {
+        case BlobIndex::Type::kBlobRecord: {
+          index.EncodeTo(&index_entry);
+          break;
+        }
+        case BlobIndex::Type::kBlobBaseRecord: {
+          BlobBaseIndex base_index(index);
+          base_index.reference = ctx->base_reference;
+          base_index.EncodeTo(&index_entry);
+          break;
+        }
+        case BlobIndex::Type::kBlobDeltaRecord: {
+          BlobDeltaIndex delta_index(index);
+          delta_index.base_index = ctx->base_index;
+          delta_index.EncodeTo(&index_entry);
+          break;
+        }
+        default:
+          assert(false); //TODO(haitao) 换个 Titan 专用报错 
+      }
       // Store WriteBatch for rewriting new Key-Index pairs to LSM
       GarbageCollectionWriteCallback callback(cfh, ikey.user_key.ToString(),
                                               std::move(original_index));
@@ -319,6 +389,14 @@ void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
       *s = WriteBatchInternal::PutBlobIndex(&wb, cfh->GetID(), ikey.user_key,
                                             index_entry);
     } else {
+      //TODO 考虑要不要在这里面加上上面那个Switch case
+      MergeBlobIndex merge_blob_index;
+      merge_blob_index.file_number = ctx->new_blob_index.file_number;
+      merge_blob_index.source_file_number = ctx->original_blob_index.file_number;
+      merge_blob_index.source_file_offset =
+          ctx->original_blob_index.blob_handle.offset;
+      merge_blob_index.blob_handle = ctx->new_blob_index.blob_handle;
+
       merge_blob_index.EncodeTo(&index_entry);
       rewrite_batches_without_callback_.emplace_back(
           std::make_pair(WriteBatch(), original_index.blob_handle.size));

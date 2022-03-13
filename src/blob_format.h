@@ -1,11 +1,14 @@
 #pragma once
 
+#include "db/dbformat.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
 #include "table/format.h"
 #include "util.h"
+#include <cstddef>
+#include <cstdint>
 
 namespace rocksdb {
 namespace titandb {
@@ -59,6 +62,7 @@ struct BlobRecord {
   friend bool operator==(const BlobRecord& lhs, const BlobRecord& rhs);
 };
 
+struct BlobDeltaIndex;
 class BlobEncoder {
  public:
   BlobEncoder(CompressionType compression, CompressionOptions compression_opt,
@@ -81,6 +85,7 @@ class BlobEncoder {
 
   void EncodeRecord(const BlobRecord& record);
   void EncodeSlice(const Slice& record);
+  void EncodeDeltaRecord(BlobRecord& record, const Slice &base);
   void SetCompressionDict(const CompressionDict* compression_dict) {
     compression_dict_ = compression_dict;
     compression_info_.reset(new CompressionInfo(
@@ -102,6 +107,8 @@ class BlobEncoder {
   CompressionContext compression_ctx_;
   const CompressionDict* compression_dict_;
   std::unique_ptr<CompressionInfo> compression_info_;
+
+  void EncodeHeader(CompressionType compression);
 };
 
 class BlobDecoder {
@@ -114,13 +121,14 @@ class BlobDecoder {
       : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
 
   Status DecodeHeader(Slice* src);
-  Status DecodeRecord(Slice* src, BlobRecord* record, OwnedSlice* buffer);
+  Status DecodeRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer);
 
   void SetUncompressionDict(const UncompressionDict* uncompression_dict) {
     uncompression_dict_ = uncompression_dict;
   }
 
   size_t GetRecordSize() const { return record_size_; }
+  CompressionType GetCompressionType() const { return compression_; }
 
  private:
   uint32_t crc_{0};
@@ -161,18 +169,45 @@ struct BlobHandle {
 struct BlobIndex {
   enum Type : unsigned char {
     kBlobRecord = 1,
-  };
+    kBlobBaseRecord = 2,
+    kBlobDeltaRecord = 3,// TODO(haitao): 处理所有kBlobRecord出现的地方，增加kDeltaRecord的选项
+  }; //TODO(haitao) 添加 Type 处理
+  unsigned char type;
   uint64_t file_number{0};
   BlobHandle blob_handle;
 
-  virtual ~BlobIndex() {}
+  // virtual ~BlobIndex() {}
 
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* src);
   static void EncodeDeletionMarkerTo(std::string* dst);
   static bool IsDeletionMarker(const BlobIndex& index);
+  bool GooodType();
 
   bool operator==(const BlobIndex& rhs) const;
+};
+
+struct BlobDeltaIndex : public BlobIndex{
+  BlobIndex base_index;
+  
+  BlobDeltaIndex(BlobIndex index);
+
+  void EncodeTo(std::string* dst) const;
+  Status DecodeFrom(Slice* src);
+  Status DecodeFromBehindBase(Slice* src);
+
+  bool operator==(const BlobDeltaIndex& rhs) const;
+};
+
+struct BlobBaseIndex : public BlobIndex{
+  uint32_t reference;
+
+  BlobBaseIndex(BlobIndex index);
+
+  void EncodeTo(std::string* dst) const;
+  Status DecodeFrom(Slice* src);
+
+  bool operator==(const BlobBaseIndex& rhs) const;
 };
 
 struct MergeBlobIndex : public BlobIndex {

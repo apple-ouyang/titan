@@ -91,6 +91,10 @@ class TitanDBImpl : public TitanDB {
   Status Get(const ReadOptions& options, ColumnFamilyHandle* handle,
              const Slice& key, PinnableSlice* value) override;
 
+  // TODO(haitao) 怕影响 override 所以没有动上面这个原型。动了到底会不会影响呢？
+  Status Get(const ReadOptions& options, ColumnFamilyHandle* handle,
+             const Slice& key, PinnableSlice* value, BlobIndex* return_index);
+
   using TitanDB::MultiGet;
   std::vector<Status> MultiGet(const ReadOptions& options,
                                const std::vector<ColumnFamilyHandle*>& handles,
@@ -194,8 +198,9 @@ class TitanDBImpl : public TitanDB {
       const TitanDBOptions& options,
       const std::vector<TitanCFDescriptor>& column_families) const;
 
-  Status GetImpl(const ReadOptions& options, ColumnFamilyHandle* handle,
-                 const Slice& key, PinnableSlice* value);
+  Status GetImpl(const ReadOptions &options, ColumnFamilyHandle *handle,
+                 const Slice &key, PinnableSlice *value,
+                 BlobIndex *return_index = nullptr);
 
   std::vector<Status> MultiGetImpl(
       const ReadOptions& options,

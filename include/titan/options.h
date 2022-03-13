@@ -5,6 +5,7 @@
 
 #include "logging/logging.h"
 #include "rocksdb/options.h"
+#include "delta_compression.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -84,6 +85,10 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   //
   // Default: kNoCompression
   CompressionType blob_file_compression{kNoCompression};
+
+  // The delta compression algorithm used to compress data in blob files.
+  // Default: kNoDeltaCompression
+  DeltaCompressType blob_file_delta_compression{kNoDeltaCompression};
 
   // The compression options. The `blob_file_compression.enabled` option is
   // ignored, we only use `blob_file_compression` above to determine wether the

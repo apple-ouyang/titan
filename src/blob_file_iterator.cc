@@ -137,6 +137,7 @@ void BlobFileIterator::GetBlobRecord() {
   // is only used for GC, we always set for_compaction to true.
   status_ = file_->Read(iterate_offset_ + kRecordHeaderSize, record_size,
                         &record_slice, buffer_.data(), true /*for_compaction*/);
+                        //TODO(haitao)搞清楚这里的 for_compraction 有什么用
   if (status_.ok()) {
     status_ =
         decoder_.DecodeRecord(&record_slice, &cur_blob_record_, &uncompressed_);

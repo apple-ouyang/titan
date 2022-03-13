@@ -60,6 +60,9 @@ class BlobFileBuilder {
     BlobIndex new_blob_index;
     bool has_value = false;
     std::string value;
+    char index_type = BlobIndex::Type::kBlobRecord;
+    uint32_t base_reference;
+    BlobIndex base_index;
   };
   typedef autovector<std::unique_ptr<BlobRecordContext>> OutContexts;
 

@@ -69,6 +69,7 @@ void BlobFileBuilder::Add(const BlobRecord& record,
 
   // The keys added into blob files are in order.
   // We do key range checks for both state
+  // TODO(Haitao) GC 差量压缩不一定是按顺序的
   if (smallest_key_.empty()) {
     smallest_key_.assign(record.key.data(), record.key.size());
   }

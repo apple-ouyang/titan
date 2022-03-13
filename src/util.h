@@ -51,6 +51,8 @@ class FixedSlice : public Slice {
   char buffer_[T];
 };
 
+bool GoodCompressionRatio(size_t compressed_size, size_t raw_size);
+
 // Compresses the input data according to the compression context.
 // Returns a slice with the output data and sets "*type" to the output
 // compression type.

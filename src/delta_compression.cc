@@ -127,28 +127,21 @@ Status FeatureIndexTable::Write(WriteBatch *updates) {
   return updates->Iterate(&hd);
 }
 
-bool FeatureIndexTable::FindKeysOfSimilarRecords(const Slice &key,
-                                                 vector<string> &similar_keys) {
+uint32_t
+FeatureIndexTable::FindKeysOfSimilarRecords(const Slice &key,
+                                            vector<Slice> &similar_keys) {
+  similar_keys.clear();
   const string k = key.ToString();
   SuperFeaturesSet sfs = key_feature_tbl.at(k);
-  bool find_similar_keys = false;
 
   for (const auto &sf : sfs.super_features) {
     for (const string &similar_key : feature_key_tbl[sf]) {
       if (similar_key != k) {
-        similar_keys.emplace_back(similar_key);
-        find_similar_keys = true;
+        similar_keys.emplace_back(Slice(similar_key));
       }
     }
   }
-
-  //如果找到相似记录，则将所有相似的记录从相似索引表中删除
-  if (find_similar_keys) {
-    for (const string &similar_key : similar_keys) {
-      Delete(similar_key);
-    }
-  }
-  return find_similar_keys;
+  return similar_keys.size();
 }
 
 FeatureSample::FeatureSample(uint8_t features_num)
@@ -204,86 +197,225 @@ SuperFeaturesSet FeatureSample::GenerateFeatures(const Slice &value) {
   return sfs;
 }
 
-void DeltaCompressSlices(const Slice &base, size_t num,
-                         const PinnableSlice *inputs,
-                         std::vector<Delta> &deltas, DeltaCompressMethod method,
-                         vector<int> &status) {
-  size_t max_input_len = 0;
-  deltas.resize(num);
-  status.resize(num);
-  for (size_t i = 0; i < num; ++i) {
-    max_input_len = std::max(max_input_len, inputs[i].size());
-  }
-  // delta.len() may > input.len(), so we make a double size of buf.
-  // So buf should be big enough.
-  const size_t kMaxBufLen = max_input_len * 2;
-  uint8_t *buf = new uint8_t[kMaxBufLen];
-  size_t buf_len;
-
-  for (size_t i = 0; i < num; ++i) {
-    switch (method) {
-    case kXDelta: {
-      status[i] = xd3_encode_memory((uint8_t *)inputs[i].data(),
-                                    inputs[i].size(), (uint8_t *)base.data(),
-                                    base.size(), buf, &buf_len, kMaxBufLen, 0);
-      break;
-    }
-    case kEDelta: {
-      // TODO：加一个input.empty的处理
-      status[i] = EDeltaEncode((uint8_t *)inputs[i].data(), inputs[i].size(),
-                               (uint8_t *)base.data(), base.size(), buf,
-                               (uint32_t *)&buf_len);
-      break;
-    }
-    case kGDelta: {
-      status[i] = gencode((uint8_t *)inputs[i].data(), inputs[i].size(),
-                          (uint8_t *)base.data(), base.size(), buf,
-                          (uint32_t *)&buf_len);
-      break;
-    }
-    default:
-      break;
-    }
-    deltas[i].data.assign((char *)buf, buf_len);
-    deltas[i].original_size = inputs[i].size();
-  }
-  delete[] buf;
+bool XDelta_Compress(const char *input, size_t input_len, const char *base,
+                     size_t base_len, ::std::string *output) {
+#ifdef _XDELTA3_H_ // TODO(haitao)
+                   // 可能是XDELTA，需要看一下这里的逻辑，比如cmake文件，先这样写把
+  if (input_len == 0 || base_len == 0)
+    return false;
+  const size_t kMaxOutLen = input_len * 2;
+  output->resize(kMaxOutLen);
+  size_t outlen;
+  int s =
+      xd3_encode_memory((uint8_t *)input, input_len, (uint8_t *)base, base_len,
+                        (uint8_t *)output->data(), &outlen, kMaxOutLen, 0);
+  output->resize(outlen);
+  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
 }
 
-DeltaStatus DeltaUncompres(const Slice &base, const Delta *delta,
-                      std::string &output, DeltaCompressMethod method) {
-  // buf.len() should == delta.original_size
-  // In case of error, we reserve double length.
-  const size_t kMaxBufLen = delta->original_size * 2;
-  uint8_t *buf = new uint8_t[kMaxBufLen];
-  size_t buf_len;
-  DeltaStatus s;
+bool XDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
+                       size_t base_len, char *output, size_t *outlen,
+                       uint32_t original_length) {
+#ifdef _XDELTA3_H_ // TODO(haitao)
+  return xd3_decode_memory((uint8_t *)delta, delta_len, (uint8_t *)base,
+                           base_len, (uint8_t *)output, outlen, original_length,
+                           0) == 0;
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
+}
 
-  switch (method) {
+bool EDelta_Compress(const char *input, size_t input_len, const char *base,
+                     size_t base_len, ::std::string *output) {
+#ifdef _EDELTA_H // TODO(haitao) 可能是 EDELTA
+                 // ，需要看一下这里的逻辑，比如cmake文件，先这样写把
+  if (input_len >
+      std::numeric_limits<uint32_t>::max()) { // TODO(haitao) 确认一下
+    // Can't compress more than 4GB
+    return false;
+  }
+  if (input_len == 0 || base_len == 0)
+    return false;
+  const size_t kMaxOutLen = input_len * 2;
+  output->resize(kMaxOutLen);
+  size_t outlen;
+  int s = EDeltaEncode((uint8_t *)input, input_len, (uint8_t *)base,
+                       (uint32_t)base_len, (uint8_t *)output->data(),
+                       (uint32_t *)&outlen);
+  output->resize(outlen);
+  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
+}
+
+bool EDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
+                       size_t base_len, char *output, uint32_t *outlen) {
+#ifdef _EDELTA_H // TODO(haitao) 可能是 EDELTA
+                 // ，需要看一下这里的逻辑，比如cmake文件，先这样写把
+  return EDeltaDecode((uint8_t *)delta, delta_len, (uint8_t *)base,
+                      (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
+}
+
+bool GDelta_Compress(const char *input, size_t input_len, const char *base,
+                     size_t base_len, ::std::string *output) {
+#ifdef GDELTA_GDELTA_H // TODO(haitao)
+  // 可能是XDELTA，需要看一下这里的逻辑，比如cmake文件，先这样写把
+  if (input_len >
+      std::numeric_limits<uint32_t>::max()) { // TODO(haitao) 确认一下
+    // Can't compress more than 4GB
+    return false;
+  }
+  if (input_len == 0 || base_len == 0)
+    return false;
+  const size_t kMaxOutLen = input_len * 2;
+  output->resize(kMaxOutLen);
+  size_t outlen;
+  int s =
+      gencode((uint8_t *)input, input_len, (uint8_t *)base, (uint32_t)base_len,
+              (uint8_t *)output->data(), (uint32_t *)&outlen);
+  output->resize(outlen);
+  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
+}
+
+bool GDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
+                       size_t base_len, char *output, uint32_t *outlen) {
+#ifdef GDELTA_GDELTA_H // TODO(haitao)
+  return gdecode((uint8_t *)delta, delta_len, (uint8_t *)base,
+                 (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
+#else
+  (void)input;
+  (void)length;
+  (void)output;
+  return false;
+#endif
+}
+
+// Delta compressed delta format:
+//
+//    +---------------------+------------------+
+//    |   original_length   | compressed value |
+//    +---------------------+------------------+
+//    |       Varint32      |                  |
+//    +---------------------+------------------+
+
+bool DeltaCompress(DeltaCompressType type, const Slice &input,
+                   const Slice &base, std::string *output) {
+  if (type == kNoDeltaCompression) {
+    return false;
+  }
+
+  uint32_t original_length = input.size();
+  // TODO(haitao) 改成Variant32 解码的时候会不会有啥问题
+  PutFixed32(output, original_length);
+
+  string compressed;
+  switch (type) {
+  case kXDelta:
+    if (XDelta_Compress(input.data(), input.size(), base.data(), base.size(),
+                        &compressed) &&
+        GoodCompressionRatio(compressed.size(), input.size())) {
+      output->append(compressed);
+      return true;
+    }
+    break;
+  case kEDelta:
+    if (EDelta_Compress(input.data(), input.size(), base.data(), base.size(),
+                        &compressed) &&
+        GoodCompressionRatio(compressed.size(), input.size())) {
+      output->append(compressed);
+      return true;
+    }
+    break;
+  case kGDelta:
+    if (GDelta_Compress(input.data(), input.size(), base.data(), base.size(),
+                        &compressed) &&
+        GoodCompressionRatio(compressed.size(), input.size())) {
+      output->append(compressed);
+      return true;
+    }
+    break;
+  default: {
+  } // Do not recognize this compression type
+  }
+
+  return false;
+}
+
+Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
+                       const Slice &base, OwnedSlice *output) {
+  int size = 0;
+  CacheAllocationPtr ubuf;
+  uint32_t original_length;
+  Slice delta_copy(delta);
+
+  if (!GetFixed32(&delta_copy, &original_length)) {
+    return Status::Corruption("Currupted delta compression", "original_length");
+  }
+
+  ubuf.reset(new char[original_length]);
+  size_t decompressed_length;
+  assert(type != kNoDeltaCompression);
+
+  switch (type) {
   case kXDelta: {
-    s = xd3_decode_memory((uint8_t *)delta->data.data(), delta->data.size(),
-                          (uint8_t *)base.data(), base.size(), buf, &buf_len,
-                          kMaxBufLen, 0);
+    if (!XDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+                           base.size(), ubuf.get(), &decompressed_length,
+                           original_length)) {
+      return Status::Corruption("Corrupted compressed blob", "XDelta");
+    }
+    output->reset(std::move(ubuf), size);
     break;
   }
-  case kEDelta: {
-    // TODO：加一个input.empty的处理
-    s = EDeltaDecode((uint8_t *)delta->data.data(), delta->data.size(),
-                     (uint8_t *)base.data(), base.size(), buf,
-                     (uint32_t *)&buf_len);
+  case kEDelta:
+    if (!EDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+                           base.size(), ubuf.get(),
+                           (uint32_t *)&decompressed_length)) {
+      return Status::Corruption("Corrupted compressed blob", "EDelta");
+    }
+    output->reset(std::move(ubuf), size);
     break;
-  }
-  case kGDelta: {
-    s = gdecode((uint8_t *)delta->data.data(), delta->data.size(),
-                (uint8_t *)base.data(), base.size(), buf, (uint32_t *)&buf_len);
+  case kGDelta:
+    if (!GDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+                           base.size(), ubuf.get(),
+                           (uint32_t *)&decompressed_length)) {
+      return Status::Corruption("Corrupted compressed blob", "GDelta");
+    }
+    output->reset(std::move(ubuf), size);
     break;
-  }
   default:
-    break;
+    return Status::Corruption("bad delta compression type");
   }
-  output.assign((char *)buf, buf_len);
-  delete[] buf;
-  return s;
+
+  if (decompressed_length != original_length)
+    return Status::Corruption("Delta Compression corrupted",
+                              "length"); // TODO 换个好名字
+
+  return Status::OK();
 }
 
 } // namespace titandb

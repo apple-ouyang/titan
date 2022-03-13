@@ -110,14 +110,18 @@ bool operator==(const BlobHandle& lhs, const BlobHandle& rhs) {
 }
 
 void BlobIndex::EncodeTo(std::string* dst) const {
-  dst->push_back(kBlobRecord);
+  dst->push_back(type);
   PutVarint64(dst, file_number);
   blob_handle.EncodeTo(dst);
 }
 
-Status BlobIndex::DecodeFrom(Slice* src) {
-  unsigned char type;
-  if (!GetChar(src, &type) || type != kBlobRecord ||
+inline bool BlobIndex::GooodType() {
+  return type == kBlobRecord || type == kBlobDeltaRecord ||
+         type == kBlobBaseRecord;
+}
+
+Status BlobIndex::DecodeFrom(Slice *src) {
+  if (!GetChar(src, &type) || !(GooodType()) ||
       !GetVarint64(src, &file_number)) {
     return Status::Corruption("BlobIndex");
   }
@@ -129,7 +133,7 @@ Status BlobIndex::DecodeFrom(Slice* src) {
 }
 
 void BlobIndex::EncodeDeletionMarkerTo(std::string* dst) {
-  dst->push_back(kBlobRecord);
+  dst->push_back(kBlobRecord);  // 这里是什么都无所谓，关键是下一行写入的0，代表删除标志
   PutVarint64(dst, 0);
   BlobHandle dummy;
   dummy.EncodeTo(dst);
@@ -141,6 +145,64 @@ bool BlobIndex::IsDeletionMarker(const BlobIndex& index) {
 
 bool BlobIndex::operator==(const BlobIndex& rhs) const {
   return (file_number == rhs.file_number && blob_handle == rhs.blob_handle);
+}
+
+BlobDeltaIndex::BlobDeltaIndex(BlobIndex index) {
+  type = BlobIndex::Type::kBlobDeltaRecord;
+  file_number = index.file_number;
+  blob_handle = index.blob_handle;
+}
+
+void BlobDeltaIndex::EncodeTo(std::string *dst) const {
+  BlobIndex::EncodeTo(dst);
+  base_index.EncodeTo(dst);
+}
+
+Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
+  Status s = base_index.DecodeFrom(src);
+  if (!s.ok()) {
+    return s;
+  }
+  return Status::OK();
+}
+
+Status BlobDeltaIndex::DecodeFrom(Slice *src) {
+  Status s = BlobIndex::DecodeFrom(src);
+  if (!s.ok()) {
+    return s;
+  }
+  return DecodeFromBehindBase(src);
+}
+
+bool BlobDeltaIndex::operator==(const BlobDeltaIndex &rhs) const {
+  return BlobIndex::operator==(rhs) && base_index == rhs.base_index;
+}
+
+BlobBaseIndex::BlobBaseIndex(BlobIndex index){
+  type = BlobIndex::Type::kBlobBaseRecord;
+  file_number = index.file_number;
+  blob_handle = index.blob_handle;
+}
+
+void BlobBaseIndex::EncodeTo(std::string *dst) const {
+  BlobIndex::EncodeTo(dst);
+  PutVarint32(dst, reference);
+}
+
+Status BlobBaseIndex::DecodeFrom(Slice *src) {
+  Status s = BlobIndex::DecodeFrom(src);
+  if (!s.ok()) {
+    return s;
+  }
+  if (!GetVarint32(src, &reference)) {
+    return Status::Corruption("BaseIndex");
+  }
+  return Status::OK();
+}
+
+bool BlobBaseIndex::operator==(const BlobBaseIndex &rhs) const {
+  return BlobIndex::operator==(rhs) && type == rhs.type &&
+         reference == rhs.reference;
 }
 
 void MergeBlobIndex::EncodeTo(std::string* dst) const {

@@ -6,6 +6,7 @@
 #include "blob_file_set.h"
 #include "blob_gc.h"
 #include "db/db_impl/db_impl.h"
+#include "db_impl.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
 #include "titan/options.h"
@@ -17,7 +18,7 @@ namespace titandb {
 
 class BlobGCJob {
  public:
-  BlobGCJob(BlobGC *blob_gc, DB *db, port::Mutex *mutex,
+  BlobGCJob(BlobGC *blob_gc, DB *db, TitanDBImpl* titan, port::Mutex *mutex,
             const TitanDBOptions &titan_db_options, bool gc_merge_rewrite,
             Env *env, const EnvOptions &env_options,
             BlobFileManager *blob_file_manager, BlobFileSet *blob_file_set,
@@ -46,6 +47,7 @@ class BlobGCJob {
   BlobGC *blob_gc_;
   DB *base_db_;
   DBImpl *base_db_impl_;
+  TitanDBImpl *titan_db_impl_;
   port::Mutex *mutex_;
   TitanDBOptions db_options_;
   const bool gc_merge_rewrite_;

@@ -63,7 +63,7 @@
 #include "rocksdb/status.h"
 #include "rocksdb/write_batch_base.h"
 #include "util/xxhash.h"
-
+#include "util.h"
 #include <cstdint>
 #include <forward_list>
 #include <map>
@@ -106,10 +106,14 @@ public:
 
   Status Write(WriteBatch *updates);
 
-  bool inline IsKeyExist(const Slice &key) { return IsKeyExist(key.ToString()); }
+  bool inline IsKeyExist(const Slice &key) {
+    return IsKeyExist(key.ToString());
+  }
 
   //查找 key 对应的记录相似记录的 similar_keys
-  bool FindKeysOfSimilarRecords(const Slice &key, vector<string> &similar_keys);
+  //如果找到相似记录则返回有多少个相似的键
+  uint32_t FindKeysOfSimilarRecords(const Slice &key,
+                                    vector<Slice> &similar_keys);
 
 private:
   // TODO:除了链表还有什么高效的结构吗？
@@ -176,21 +180,27 @@ private:
   uint64_t *transform_args_b_;
 };
 
-typedef struct{
-  std::string data;
-  size_t original_size;
-} Delta;
+// speed:             edelta > gdelta > xdelta
+// compression ratio: gdelta > xdelta > edelta
+// default:           kNoDeltaCompression
+// recommend:         kGdelta
+enum DeltaCompressType : char {
+  kNoDeltaCompression,
+  kXDelta, // traditional delta compression algorithm
+  kEDelta, // fastest but also low compression ratio
+  kGDelta  // faster and higher compression ratio
+};
 
-enum DeltaCompressMethod { kXDelta, kEDelta, kGDelta };
-typedef int DeltaStatus;
+enum DeltaStatus { OK = 0 };
 
-void DeltaCompressSlices(const Slice &base, size_t num,
-                         const PinnableSlice *inputs,
-                         std::vector<Delta> &deltas, DeltaCompressMethod method,
-                         vector<int> &status);
+// Returns true if:
+// (1) the compression method is supported in this platform and
+// (2) the compression rate is "good enough".
+bool DeltaCompress(DeltaCompressType type, const Slice &input,
+                   const Slice &base, std::string *output);
 
-DeltaStatus DeltaUncompres(const Slice &base, const Delta *delta,
-                      std::string &output, DeltaCompressMethod method);
+Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
+                       const Slice &base, OwnedSlice *output);
 
 // 全局变量： TODO：暂时不知道放哪里
 extern FeatureIndexTable feature_idx_tbl;
