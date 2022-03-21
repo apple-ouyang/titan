@@ -5,10 +5,16 @@
 
 #include "logging/logging.h"
 #include "rocksdb/options.h"
-#include "delta_compression.h"
 
 namespace rocksdb {
 namespace titandb {
+  
+enum DeltaCompressType : unsigned char {
+  kNoDeltaCompression = 0,
+  kXDelta = 1, // traditional delta compression algorithm
+  kEDelta = 2, // fastest but also low compression ratio
+  kGDelta = 3  // faster and higher compression ratio than Xdelta
+};
 
 struct TitanDBOptions : public DBOptions {
   // The directory to store data specific to TitanDB alongside with

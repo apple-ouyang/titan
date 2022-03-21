@@ -14,6 +14,7 @@
 #include "rocksdb/write_batch_base.h"
 #include "util/xxhash.h"
 #include "util.h"
+#include "titan/options.h"
 #include "options/options_helper.h"
 
 #include <cstdint>
@@ -130,13 +131,6 @@ private:
   uint64_t *features_;
   uint64_t *transform_args_a_; // random numbers
   uint64_t *transform_args_b_;
-};
-
-enum DeltaCompressType : unsigned char {
-  kNoDeltaCompression = 0,
-  kXDelta = 1, // traditional delta compression algorithm
-  kEDelta = 2, // fastest but also low compression ratio
-  kGDelta = 3  // faster and higher compression ratio than Xdelta
 };
 
 // Returns true if:
