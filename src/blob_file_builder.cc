@@ -1,4 +1,5 @@
 #include "blob_file_builder.h"
+#include "blob_format.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -46,12 +47,15 @@ void BlobFileBuilder::WriteHeader() {
 
 void BlobFileBuilder::Add(const BlobRecord& record,
                           std::unique_ptr<BlobRecordContext> ctx,
-                          OutContexts* out_ctx) {
+                          OutContexts* out_ctx, const DeltaInfo *delta_info) {
   if (!ok()) return;
   std::string key = record.key.ToString();
+  //TODO(haitao) 考虑kBuffered怎么处理这个delta_info
   if (builder_state_ == BuilderState::kBuffered) {
     std::string record_str;
     // Encode to take ownership of underlying string.
+    if(delta_info != nullptr)
+      delta_info->EncodeBaseIndex(&record_str);
     record.EncodeTo(&record_str);
     sample_records_.emplace_back(record_str);
     sample_str_len_ += record_str.size();
@@ -62,21 +66,30 @@ void BlobFileBuilder::Add(const BlobRecord& record,
       EnterUnbuffered(out_ctx);
     }
   } else {
-    encoder_.EncodeRecord(record);
+    encoder_.EncodeRecord(record, delta_info);
     WriteEncoderData(&ctx->new_blob_index.blob_handle);
     out_ctx->emplace_back(std::move(ctx));
   }
 
   // The keys added into blob files are in order.
   // We do key range checks for both state
-  // TODO(Haitao) GC 差量压缩不一定是按顺序的
-  if (smallest_key_.empty()) {
+  // TODO(Haitao) 有没有好办法避免每次都比较大小，每次比较怕是会很慢
+  // TODO(haitao) 测试每次都比较需要消耗多少时间
+  if (smallest_key_.empty() ||
+      cf_options_.comparator->Compare(record.key, Slice(smallest_key_)) < 0) {
     smallest_key_.assign(record.key.data(), record.key.size());
+  } else if (largest_key_.empty() || cf_options_.comparator->Compare(
+                                         record.key, Slice(largest_key_)) > 0) {
+    largest_key_.assign(record.key.data(), record.key.size());
   }
-  assert(cf_options_.comparator->Compare(record.key, Slice(smallest_key_)) >=
-         0);
-  assert(cf_options_.comparator->Compare(record.key, Slice(largest_key_)) >= 0);
-  largest_key_.assign(record.key.data(), record.key.size());
+
+  // if (smallest_key_.empty()) {
+  //   smallest_key_.assign(record.key.data(), record.key.size());
+  // }
+  // assert(cf_options_.comparator->Compare(record.key, Slice(smallest_key_)) >=
+  //        0);
+  // assert(cf_options_.comparator->Compare(record.key, Slice(largest_key_)) >= 0);
+  // largest_key_.assign(record.key.data(), record.key.size());
 }
 
 void BlobFileBuilder::AddSmall(std::unique_ptr<BlobRecordContext> ctx) {

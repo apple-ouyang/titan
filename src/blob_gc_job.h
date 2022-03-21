@@ -96,11 +96,29 @@ class BlobGCJob {
   Status BuildIterator(std::unique_ptr<BlobFileMergeIterator> *result);
   Status DiscardEntry(const Slice &key, const BlobIndex &blob_index,
                       bool *discardable);
+  inline void DiscardBaseEntry(const DeltaInfo &info, bool *discardable);
   Status InstallOutputBlobFiles();
   Status RewriteValidKeyToLSM();
   Status DeleteInputBlobFiles();
 
   bool IsShutingDown();
+  size_t DeltaCompressSimilarRecords(const Slice &base,
+                                     const vector<Slice> &similar_keys,
+                                     vector<string> &deltas,
+                                     vector<BlobIndex> &delta_indexes,
+                                     vector<bool> &is_delta_ok);
+
+  size_t IterateDeltasUnderBase(std::unique_ptr<BlobFileMergeIterator> &gc_iter,
+                                const size_t kDeltasNumber,
+                                vector<string> &keys, vector<string> &values,
+                                vector<BlobIndex> &indexes,
+                                vector<bool> &is_delta_ok, DeltaInfo &info);
+  void WriteDeltas(const BlobIndex &new_base_index, const vector<Slice> &keys,
+                   const vector<string> &values, vector<BlobIndex> &indexes,
+                   const DeltaInfo *delta_info, vector<bool> &ok,
+                   uint64_t write_file_number,
+                   const std::unique_ptr<BlobFileBuilder> &blob_file_builder,
+                   bool is_delete_feature);
 };
 
 }  // namespace titandb

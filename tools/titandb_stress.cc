@@ -2934,6 +2934,7 @@ class StressTest {
           options_.blob_cache = cache_;
         }
         options_.blob_file_compression = kLZ4Compression;
+        // TOOD(haitao) 增加 delta 的
         options_.blob_file_target_size = 128 << 20;
         options_.disable_background_gc = FLAGS_disable_background_gc;
         options_.min_blob_size = FLAGS_min_blob_size;

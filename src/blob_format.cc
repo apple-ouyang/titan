@@ -1,7 +1,13 @@
 #include "blob_format.h"
 
+#include "delta_compression.h"
+#include "rocksdb/options.h"
+#include "rocksdb/slice.h"
+#include "rocksdb/status.h"
 #include "test_util/sync_point.h"
+#include "util/coding.h"
 #include "util/crc32c.h"
+#include <cstddef>
 
 namespace rocksdb {
 namespace titandb {
@@ -34,21 +40,31 @@ bool operator==(const BlobRecord& lhs, const BlobRecord& rhs) {
   return lhs.key == rhs.key && lhs.value == rhs.value;
 }
 
-void BlobEncoder::EncodeRecord(const BlobRecord& record) {
+void BlobEncoder::EncodeRecord(const BlobRecord& record, const DeltaInfo* delta_info) {
   record_buffer_.clear();
+  if(delta_info != nullptr)
+    delta_info->EncodeBaseIndex(&record_buffer_);
   record.EncodeTo(&record_buffer_);
   EncodeSlice(record_buffer_);
 }
 
-void BlobEncoder::EncodeSlice(const Slice& record) {
+void BlobEncoder::EncodeSlice(const Slice& record, const DeltaInfo* delta_info) {
   compressed_buffer_.clear();
   CompressionType compression;
   record_ =
       Compress(*compression_info_, record, &compressed_buffer_, &compression);
 
+  EncodeHeader(compression, delta_info);
+}
+
+void BlobEncoder::EncodeHeader(CompressionType compression, const DeltaInfo* delta_info){
   assert(record_.size() < std::numeric_limits<uint32_t>::max());
   EncodeFixed32(header_ + 4, static_cast<uint32_t>(record_.size()));
   header_[8] = compression;
+
+  DeltaInfo info = (delta_info == nullptr)? DeltaInfo() : *delta_info;
+  header_[9] = info.flag.to_char;
+  EncodeFixed16(header_ + 10, info.reference);
 
   uint32_t crc = crc32c::Value(header_ + 4, sizeof(header_) - 4);
   crc = crc32c::Extend(crc, record_.data(), record_.size());
@@ -62,11 +78,29 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
   header_crc_ = crc32c::Value(src->data(), kRecordHeaderSize - 4);
 
   unsigned char compression;
-  if (!GetFixed32(src, &record_size_) || !GetChar(src, &compression)) {
+  if (!GetFixed32(src, &record_size_) || !GetChar(src, &compression) ||
+      !GetChar(src, &delta_info_.flag.to_char) ||
+      !GetFixed16(src, &delta_info_.reference)) {
     return Status::Corruption("BlobHeader");
   }
 
   compression_ = static_cast<CompressionType>(compression);
+
+  //TODO(haitao) 可不可以把header的reference搞成可选字段
+  // 如果这样的话，需要修改读取时的size
+  // if(type_ == kBaseRecord){
+  //   if(!GetFixed32(src, &reference_)){
+  //     return Status::Corruption("BlobHeader", "reference");
+  //   }
+  // }
+
+  return Status::OK();
+}
+
+inline Status BlobDecoder::DecodeBaseIndex(Slice *src){
+  if(delta_info_.flag.GetBlobType() == kDeltaRecord){
+    return delta_info_.base_index.DecodeFrom(src);
+  }
   return Status::OK();
 }
 
@@ -81,16 +115,21 @@ Status BlobDecoder::DecodeRecord(Slice* src, BlobRecord* record,
     return Status::Corruption("BlobRecord", "checksum mismatch");
   }
 
-  if (compression_ == kNoCompression) {
-    return DecodeInto(input, record);
+  Status s;
+  if(compression_ != kNoCompression){
+    UncompressionContext ctx(compression_);
+    UncompressionInfo info(ctx, *uncompression_dict_, compression_);
+    s = Uncompress(info, input, buffer);
+    if (!s.ok()) {
+      return s;
+    }
+    input = Slice(*buffer);
   }
-  UncompressionContext ctx(compression_);
-  UncompressionInfo info(ctx, *uncompression_dict_, compression_);
-  Status s = Uncompress(info, input, buffer);
-  if (!s.ok()) {
+  
+  s = DecodeBaseIndex(&input);
+  if(!s.ok())
     return s;
-  }
-  return DecodeInto(*buffer, record);
+  return DecodeInto(input, record);
 }
 
 void BlobHandle::EncodeTo(std::string* dst) const {
@@ -115,16 +154,18 @@ void BlobIndex::EncodeTo(std::string* dst) const {
   blob_handle.EncodeTo(dst);
 }
 
-inline bool BlobIndex::GooodType() {
-  return type == kBlobRecord || type == kBlobDeltaRecord ||
-         type == kBlobBaseRecord;
+inline bool BlobIndex::GoodType() {
+  return type == kBlobRecord || type == kDeltaRecord ||
+         type == kBaseRecord;
 }
 
-Status BlobIndex::DecodeFrom(Slice *src) {
-  if (!GetChar(src, &type) || !(GooodType()) ||
+Status BlobIndex::DecodeFrom(Slice* src) {
+  unsigned char read_type;
+  if (!GetChar(src, &read_type) || !(GoodType()) ||
       !GetVarint64(src, &file_number)) {
     return Status::Corruption("BlobIndex");
   }
+  type = static_cast<BlobType>(read_type);
   Status s = blob_handle.DecodeFrom(src);
   if (!s.ok()) {
     return Status::Corruption("BlobIndex", s.ToString());
@@ -133,8 +174,8 @@ Status BlobIndex::DecodeFrom(Slice *src) {
 }
 
 void BlobIndex::EncodeDeletionMarkerTo(std::string* dst) {
-  dst->push_back(kBlobRecord);  // 这里是什么都无所谓，关键是下一行写入的0，代表删除标志
-  PutVarint64(dst, 0);
+  dst->push_back(kBlobRecord);  // The type doesn't matter, anyone is ok.
+  PutVarint64(dst, 0);          // What matter is the 0 in the next line. This means the delete flag
   BlobHandle dummy;
   dummy.EncodeTo(dst);
 }
@@ -148,7 +189,7 @@ bool BlobIndex::operator==(const BlobIndex& rhs) const {
 }
 
 BlobDeltaIndex::BlobDeltaIndex(BlobIndex index) {
-  type = BlobIndex::Type::kBlobDeltaRecord;
+  type = BlobType::kDeltaRecord;
   file_number = index.file_number;
   blob_handle = index.blob_handle;
 }
@@ -158,52 +199,9 @@ void BlobDeltaIndex::EncodeTo(std::string *dst) const {
   base_index.EncodeTo(dst);
 }
 
-Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
-  Status s = base_index.DecodeFrom(src);
-  if (!s.ok()) {
-    return s;
-  }
-  return Status::OK();
-}
-
-Status BlobDeltaIndex::DecodeFrom(Slice *src) {
-  Status s = BlobIndex::DecodeFrom(src);
-  if (!s.ok()) {
-    return s;
-  }
-  return DecodeFromBehindBase(src);
-}
-
-bool BlobDeltaIndex::operator==(const BlobDeltaIndex &rhs) const {
-  return BlobIndex::operator==(rhs) && base_index == rhs.base_index;
-}
-
-BlobBaseIndex::BlobBaseIndex(BlobIndex index){
-  type = BlobIndex::Type::kBlobBaseRecord;
-  file_number = index.file_number;
-  blob_handle = index.blob_handle;
-}
-
-void BlobBaseIndex::EncodeTo(std::string *dst) const {
-  BlobIndex::EncodeTo(dst);
-  PutVarint32(dst, reference);
-}
-
-Status BlobBaseIndex::DecodeFrom(Slice *src) {
-  Status s = BlobIndex::DecodeFrom(src);
-  if (!s.ok()) {
-    return s;
-  }
-  if (!GetVarint32(src, &reference)) {
-    return Status::Corruption("BaseIndex");
-  }
-  return Status::OK();
-}
-
-bool BlobBaseIndex::operator==(const BlobBaseIndex &rhs) const {
-  return BlobIndex::operator==(rhs) && type == rhs.type &&
-         reference == rhs.reference;
-}
+// inline Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
+//   return base_index.DecodeFrom(src);
+// }
 
 void MergeBlobIndex::EncodeTo(std::string* dst) const {
   BlobIndex::EncodeTo(dst);
@@ -227,9 +225,9 @@ Status MergeBlobIndex::DecodeFrom(Slice* src) {
   return s;
 }
 
-Status MergeBlobIndex::DecodeFromBase(Slice* src) {
-  return BlobIndex::DecodeFrom(src);
-}
+// inline Status MergeBlobIndex::DecodeFromBase(Slice* src) {
+//   return BlobIndex::DecodeFrom(src);
+// }
 
 bool MergeBlobIndex::operator==(const MergeBlobIndex& rhs) const {
   return (source_file_number == rhs.source_file_number &&

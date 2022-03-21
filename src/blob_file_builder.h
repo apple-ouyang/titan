@@ -60,9 +60,7 @@ class BlobFileBuilder {
     BlobIndex new_blob_index;
     bool has_value = false;
     std::string value;
-    char index_type = BlobIndex::Type::kBlobRecord;
-    uint32_t base_reference;
-    BlobIndex base_index;
+    BlobIndex base_index; // only kDeltaRecord has this field
   };
   typedef autovector<std::unique_ptr<BlobRecordContext>> OutContexts;
 
@@ -79,7 +77,7 @@ class BlobFileBuilder {
   // 2. Caller should set `ctx.new_blob_index.file_number` before pass it in,
   //    the file builder will only change the `blob_handle` of it
   void Add(const BlobRecord& record, std::unique_ptr<BlobRecordContext> ctx,
-           OutContexts* out_ctx);
+           OutContexts* out_ctx, const DeltaInfo *delta_info = nullptr);
 
   // AddSmall is used to prevent the disorder issue, small KV pairs and blob
   // index block may be passed in here

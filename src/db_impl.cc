@@ -106,10 +106,10 @@ class TitanDBImpl::FileManager : public BlobFileManager {
   Status BatchDeleteFiles(
       const std::vector<std::unique_ptr<BlobFileHandle>>& handles) override {
     Status s;
-    uint64_t file_size = 0;
+    // uint64_t file_size = 0;
     for (auto& handle : handles) {
       s = db_->env_->DeleteFile(handle->GetName());
-      file_size += handle->GetFile()->GetFileSize();
+      // file_size += handle->GetFile()->GetFileSize();
     }
     {
       MutexLock l(&db_->mutex_);
@@ -682,33 +682,45 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
 
   OwnedSlice decompressed_buffer;
   if (storage) {
-    if(index.type == BlobIndex::kBlobDeltaRecord){
+    if(index.type == kDeltaRecord){
+      BlobDeltaIndex delta_index(index);
       BlobRecord base;
       PinnableSlice base_buffer;
-      BlobDeltaIndex delta_index(index);
-      delta_index.DecodeFromBehindBase(value);
+      // If the record is a delta record, there should be a base_index
+      // behind the blob_index. Use the base_index to read the base, and after
+      // uncompressing we can get the value
+
+      //TODO(haitao) 给所有以下return s 的代码加上log
+      s = delta_index.DecodeFromBehindBase(value);
+      if(!s.ok())
+        return s;
 
       //TODO(haitao) 这里的统计信息要不要改
       StopWatch read_sw(env_, statistics(stats_.get()),
                       TITAN_BLOB_FILE_READ_MICROS);
-      // 读取 base
+      // read base
       s = storage->Get(options, delta_index.base_index, &base, &base_buffer);
       if(!s.ok())
         return s;
-      // 读取差量压缩后的 delta，并用 base 解压缩还原记录
+      // read delta，and use base to uncompress
       s = storage->Get(options, index, &record, &buffer);
       if(!s.ok())
         return s;
       RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
       RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
                 index.blob_handle.size);
-      DeltaCompressType type = storage->cf_options().blob_file_delta_compression;
-      
-      s = DeltaUncompress(type, record.value, base.value, &decompressed_buffer);
+      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
+                delta_index.base_index.blob_handle.size);
+      DeltaCompressType delta_compress_type =
+          storage->cf_options().blob_file_delta_compression;
+
+      s = DeltaUncompress(delta_compress_type, record.value, base.value, &decompressed_buffer);
       if(!s.ok())
         return s;
       record.value = decompressed_buffer;
     }else{
+      // the base record or the blob record are not delta compressed
+      // so just get the value
       StopWatch read_sw(env_, statistics(stats_.get()),
                       TITAN_BLOB_FILE_READ_MICROS);
       s = storage->Get(options, index, &record, &buffer);

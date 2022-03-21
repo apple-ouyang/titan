@@ -3835,6 +3835,7 @@ class Benchmark {
     opts->max_background_gc = FLAGS_titan_max_background_gc;
     opts->min_gc_batch_size = 128 << 20;
     opts->blob_file_compression = FLAGS_compression_type_e;
+    // TODO(haitao) 增加 delta 的
     if (FLAGS_titan_blob_cache_size > 0) {
       opts->blob_cache = NewLRUCache(FLAGS_titan_blob_cache_size);
     }

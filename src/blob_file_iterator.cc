@@ -144,6 +144,7 @@ void BlobFileIterator::GetBlobRecord() {
   }
   if (!status_.ok()) return;
 
+  delta_info_ = decoder_.GetDeltaInfo();
   cur_record_offset_ = iterate_offset_;
   cur_record_size_ = kRecordHeaderSize + record_size;
   iterate_offset_ += cur_record_size_;

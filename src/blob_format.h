@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/dbformat.h"
+#include "delta_compression.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
@@ -30,17 +31,23 @@ namespace titandb {
 // For now, the only kind of meta block is an optional uncompression dictionary
 // indicated by a flag in the file header.
 
-// Format of blob head (9 bytes):
+// Format of blob head (10 bytes):
 //
-//    +---------+---------+-------------+
-//    |   crc   |  size   | compression |
-//    +---------+---------+-------------+
-//    | Fixed32 | Fixed32 |    char     |
-//    +---------+---------+-------------+
+//    +---------+---------+-------------+------------+-------------+
+//    |   crc   |  size   | compression | delta_flag |  reference  |
+//    +---------+---------+-------------+------------+-------------+
+//    | Fixed32 | Fixed32 |    char     |    char    |   Fixed16   |
+//    +---------+---------+-------------+------------+-------------+
 //
 const uint64_t kBlobMaxHeaderSize = 12;
-const uint64_t kRecordHeaderSize = 9;
+const uint64_t kRecordHeaderSize = 12;
 const uint64_t kBlobFooterSize = BlockHandle::kMaxEncodedLength + 8 + 4;
+
+enum BlobType : unsigned char {
+  kBlobRecord = 0b00,
+  kBaseRecord = 0b01,
+  kDeltaRecord = 0b10
+}; 
 
 // Format of blob record (not fixed size):
 //
@@ -60,82 +67,6 @@ struct BlobRecord {
   size_t size() const { return key.size() + value.size(); }
 
   friend bool operator==(const BlobRecord& lhs, const BlobRecord& rhs);
-};
-
-struct BlobDeltaIndex;
-class BlobEncoder {
- public:
-  BlobEncoder(CompressionType compression, CompressionOptions compression_opt,
-              const CompressionDict* compression_dict)
-      : compression_opt_(compression_opt),
-        compression_ctx_(compression),
-        compression_dict_(compression_dict),
-        compression_info_(new CompressionInfo(
-            compression_opt_, compression_ctx_, *compression_dict_, compression,
-            0 /*sample_for_compression*/)) {}
-  BlobEncoder(CompressionType compression)
-      : BlobEncoder(compression, CompressionOptions(),
-                    &CompressionDict::GetEmptyDict()) {}
-  BlobEncoder(CompressionType compression,
-              const CompressionDict* compression_dict)
-      : BlobEncoder(compression, CompressionOptions(), compression_dict) {}
-  BlobEncoder(CompressionType compression, CompressionOptions compression_opt)
-      : BlobEncoder(compression, compression_opt,
-                    &CompressionDict::GetEmptyDict()) {}
-
-  void EncodeRecord(const BlobRecord& record);
-  void EncodeSlice(const Slice& record);
-  void EncodeDeltaRecord(BlobRecord& record, const Slice &base);
-  void SetCompressionDict(const CompressionDict* compression_dict) {
-    compression_dict_ = compression_dict;
-    compression_info_.reset(new CompressionInfo(
-        compression_opt_, compression_ctx_, *compression_dict_,
-        compression_info_->type(), compression_info_->SampleForCompression()));
-  }
-
-  Slice GetHeader() const { return Slice(header_, sizeof(header_)); }
-  Slice GetRecord() const { return record_; }
-
-  size_t GetEncodedSize() const { return sizeof(header_) + record_.size(); }
-
- private:
-  char header_[kRecordHeaderSize];
-  Slice record_;
-  std::string record_buffer_;
-  std::string compressed_buffer_;
-  CompressionOptions compression_opt_;
-  CompressionContext compression_ctx_;
-  const CompressionDict* compression_dict_;
-  std::unique_ptr<CompressionInfo> compression_info_;
-
-  void EncodeHeader(CompressionType compression);
-};
-
-class BlobDecoder {
- public:
-  BlobDecoder(const UncompressionDict* uncompression_dict,
-              CompressionType compression = kNoCompression)
-      : compression_(compression), uncompression_dict_(uncompression_dict) {}
-
-  BlobDecoder()
-      : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
-
-  Status DecodeHeader(Slice* src);
-  Status DecodeRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer);
-
-  void SetUncompressionDict(const UncompressionDict* uncompression_dict) {
-    uncompression_dict_ = uncompression_dict;
-  }
-
-  size_t GetRecordSize() const { return record_size_; }
-  CompressionType GetCompressionType() const { return compression_; }
-
- private:
-  uint32_t crc_{0};
-  uint32_t header_crc_{0};
-  uint32_t record_size_{0};
-  CompressionType compression_{kNoCompression};
-  const UncompressionDict* uncompression_dict_;
 };
 
 // Format of blob handle (not fixed size):
@@ -167,24 +98,56 @@ struct BlobHandle {
 // It is stored in LSM-Tree as the value of key, then Titan can use this blob
 // index to locate actual value from blob file.
 struct BlobIndex {
-  enum Type : unsigned char {
-    kBlobRecord = 1,
-    kBlobBaseRecord = 2,
-    kBlobDeltaRecord = 3,// TODO(haitao): 处理所有kBlobRecord出现的地方，增加kDeltaRecord的选项
-  }; //TODO(haitao) 添加 Type 处理
-  unsigned char type;
+  BlobType type = kBlobRecord;
   uint64_t file_number{0};
   BlobHandle blob_handle;
-
-  // virtual ~BlobIndex() {}
 
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* src);
   static void EncodeDeletionMarkerTo(std::string* dst);
   static bool IsDeletionMarker(const BlobIndex& index);
-  bool GooodType();
+  bool GoodType();
 
   bool operator==(const BlobIndex& rhs) const;
+};
+
+union DeltaFlag{
+  struct {
+    BlobType index_type : 2;
+    DeltaCompressType delta_compress_type : 6;
+  } flag = {kBlobRecord, kNoDeltaCompression};
+  unsigned char to_char;
+
+  DeltaFlag(){
+    flag.index_type = kBlobRecord;
+    flag.delta_compress_type = kNoDeltaCompression;
+  }
+  DeltaFlag(BlobType index, DeltaCompressType compress){
+    flag.index_type = index;
+    flag.delta_compress_type = compress;
+  }
+
+  inline BlobType GetBlobType() const { return this->flag.index_type; }
+  inline DeltaCompressType GetDeltaCompressType() const {
+    return this->flag.delta_compress_type;
+  }
+};
+
+
+struct DeltaInfo{
+  DeltaFlag flag{};
+  uint16_t reference; // only delta record have this field
+  BlobIndex base_index; // only base record have this field
+
+  inline void EncodeBaseIndex(string *dst) const {
+    if (flag.GetBlobType() == kDeltaRecord)
+      base_index.EncodeTo(dst);
+  }
+};
+
+struct BlobIndexDeltaInfo{
+  BlobIndex index;
+  DeltaInfo info;
 };
 
 struct BlobDeltaIndex : public BlobIndex{
@@ -193,21 +156,10 @@ struct BlobDeltaIndex : public BlobIndex{
   BlobDeltaIndex(BlobIndex index);
 
   void EncodeTo(std::string* dst) const;
-  Status DecodeFrom(Slice* src);
-  Status DecodeFromBehindBase(Slice* src);
-
-  bool operator==(const BlobDeltaIndex& rhs) const;
-};
-
-struct BlobBaseIndex : public BlobIndex{
-  uint32_t reference;
-
-  BlobBaseIndex(BlobIndex index);
-
-  void EncodeTo(std::string* dst) const;
-  Status DecodeFrom(Slice* src);
-
-  bool operator==(const BlobBaseIndex& rhs) const;
+  //TODO(haitao) 能不能不要在这里定义
+  inline Status DecodeFromBehindBase(Slice* src){
+    return base_index.DecodeFrom(src);
+  }
 };
 
 struct MergeBlobIndex : public BlobIndex {
@@ -217,9 +169,90 @@ struct MergeBlobIndex : public BlobIndex {
   void EncodeTo(std::string* dst) const;
   void EncodeToBase(std::string* dst) const;
   Status DecodeFrom(Slice* src);
-  Status DecodeFromBase(Slice* src);
+  //TODO(haitao) 为什么要修改这里？
+  inline Status DecodeFromBase(Slice* src){
+    return BlobIndex::DecodeFrom(src);
+  }
 
   bool operator==(const MergeBlobIndex& rhs) const;
+};
+
+class BlobEncoder {
+public:
+  BlobEncoder(CompressionType compression, CompressionOptions compression_opt,
+              const CompressionDict *compression_dict)
+      : compression_opt_(compression_opt), compression_ctx_(compression),
+        compression_dict_(compression_dict),
+        compression_info_(new CompressionInfo(
+            compression_opt_, compression_ctx_, *compression_dict_, compression,
+            0 /*sample_for_compression*/)) {}
+  BlobEncoder(CompressionType compression)
+      : BlobEncoder(compression, CompressionOptions(),
+                    &CompressionDict::GetEmptyDict()) {}
+  BlobEncoder(CompressionType compression,
+              const CompressionDict *compression_dict)
+      : BlobEncoder(compression, CompressionOptions(), compression_dict) {}
+  BlobEncoder(CompressionType compression, CompressionOptions compression_opt)
+      : BlobEncoder(compression, compression_opt,
+                    &CompressionDict::GetEmptyDict()) {}
+
+  void EncodeRecord(const BlobRecord &record,
+                    const DeltaInfo *delta_info = nullptr);
+  void EncodeSlice(const Slice &record, const DeltaInfo *delta_info = nullptr);
+  void SetCompressionDict(const CompressionDict *compression_dict) {
+    compression_dict_ = compression_dict;
+    compression_info_.reset(new CompressionInfo(
+        compression_opt_, compression_ctx_, *compression_dict_,
+        compression_info_->type(), compression_info_->SampleForCompression()));
+  }
+
+  Slice GetHeader() const { return Slice(header_, sizeof(header_)); }
+  Slice GetRecord() const { return record_; }
+
+  size_t GetEncodedSize() const { return sizeof(header_) + record_.size(); }
+
+private:
+  char header_[kRecordHeaderSize];
+  Slice record_;
+  std::string record_buffer_;
+  std::string compressed_buffer_;
+  CompressionOptions compression_opt_;
+  CompressionContext compression_ctx_;
+  const CompressionDict *compression_dict_;
+  std::unique_ptr<CompressionInfo> compression_info_;
+
+  void EncodeHeader(CompressionType compression,
+                    const DeltaInfo *delta_info = nullptr);
+};
+
+class BlobDecoder {
+ public:
+  BlobDecoder(const UncompressionDict* uncompression_dict,
+              CompressionType compression = kNoCompression)
+      : compression_(compression), uncompression_dict_(uncompression_dict) {}
+
+  BlobDecoder()
+      : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
+
+  Status DecodeHeader(Slice* src);
+  Status DecodeRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer);
+
+  void SetUncompressionDict(const UncompressionDict* uncompression_dict) {
+    uncompression_dict_ = uncompression_dict;
+  }
+
+  size_t GetRecordSize() const { return record_size_; }
+  DeltaInfo GetDeltaInfo() const {return delta_info_;}
+
+ private:
+  uint32_t crc_{0};
+  uint32_t header_crc_{0};
+  uint32_t record_size_{0};
+  CompressionType compression_{kNoCompression};
+  DeltaInfo delta_info_{};
+  const UncompressionDict* uncompression_dict_;
+
+  inline Status DecodeBaseIndex(Slice *src);
 };
 
 // Format of blob file meta (not fixed size):

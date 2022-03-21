@@ -44,6 +44,14 @@ class BlobFileIterator {
     return blob_index;
   }
 
+  BlobIndexDeltaInfo GetBlobIndexDeltaInfo() {
+    BlobIndex blob_index = GetBlobIndex();
+    BlobIndexDeltaInfo index_info;
+    index_info.index = blob_index;
+    index_info.info = delta_info_;
+    return index_info;
+  }
+
  private:
   // Blob file info
   const std::unique_ptr<RandomAccessFileReader> file_;
@@ -73,6 +81,7 @@ class BlobFileIterator {
   uint64_t readahead_end_offset_{0};
   uint64_t readahead_size_{kMinReadaheadSize};
 
+  DeltaInfo delta_info_;
   void PrefetchAndGet();
   void GetBlobRecord();
 };
@@ -96,6 +105,9 @@ class BlobFileMergeIterator {
   }
 
   BlobIndex GetBlobIndex() { return current_->GetBlobIndex(); }
+  BlobIndexDeltaInfo GetBlobIndexDeltaInfo() {
+    return current_->GetBlobIndexDeltaInfo();
+  }
 
  private:
   class BlobFileIterComparator {

@@ -8,6 +8,9 @@ set(GDELTA ${PROJECT_SOURCE_DIR}/third-party/gdelta/)
 set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
 set(EDELTA ${PROJECT_SOURCE_DIR}/third-party/edelta)
 
+# TODO(haitao) 想办法去掉这行也能编译
+add_compile_options(-Wno-error)
+
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/pingcap/rocksdb.git")
 endif()

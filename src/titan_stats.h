@@ -11,7 +11,7 @@
 #include "monitoring/statistics.h"
 #include "rocksdb/iostats_context.h"
 #include "rocksdb/statistics.h"
-#include "titan/options.h"
+// #include "titan/options.h"
 #include "titan/statistics.h"
 #include "util/string_util.h"
 

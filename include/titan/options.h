@@ -87,6 +87,11 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   CompressionType blob_file_compression{kNoCompression};
 
   // The delta compression algorithm used to compress data in blob files.
+  // speed:               edelta > gdelta > xdelta
+  // compression ratio:   gdelta > xdelta > edelta
+  // default:             kNoDeltaCompression
+  // recommend:           kGdelta
+  // 
   // Default: kNoDeltaCompression
   DeltaCompressType blob_file_delta_compression{kNoDeltaCompression};
 
@@ -202,6 +207,7 @@ struct ImmutableTitanCFOptions {
   explicit ImmutableTitanCFOptions(const TitanCFOptions& opts)
       : min_blob_size(opts.min_blob_size),
         blob_file_compression(opts.blob_file_compression),
+        blob_file_delta_compression(opts.blob_file_delta_compression),
         blob_file_target_size(opts.blob_file_target_size),
         blob_cache(opts.blob_cache),
         max_gc_batch_size(opts.max_gc_batch_size),
@@ -215,6 +221,8 @@ struct ImmutableTitanCFOptions {
   uint64_t min_blob_size;
 
   CompressionType blob_file_compression;
+
+  DeltaCompressType blob_file_delta_compression;
 
   uint64_t blob_file_target_size;
 

@@ -157,7 +157,7 @@ class BlobGCJobTest : public testing::TestWithParam<bool /*gc_merge_mode*/> {
     if (blob_gc) {
       blob_gc->SetColumnFamily(cfh);
 
-      BlobGCJob blob_gc_job(blob_gc.get(), base_db_, mutex_, tdb_->db_options_,
+      BlobGCJob blob_gc_job(blob_gc.get(), base_db_, tdb_, mutex_, tdb_->db_options_,
                             GetParam(), tdb_->env_, EnvOptions(options_),
                             tdb_->blob_manager_.get(), blob_file_set_,
                             &log_buffer, nullptr, nullptr);
@@ -216,7 +216,7 @@ class BlobGCJobTest : public testing::TestWithParam<bool /*gc_merge_mode*/> {
     std::vector<std::shared_ptr<BlobFileMeta>> tmp;
     BlobGC blob_gc(std::move(tmp), TitanCFOptions(), false /*trigger_next*/);
     blob_gc.SetColumnFamily(cfh);
-    BlobGCJob blob_gc_job(&blob_gc, base_db_, mutex_, TitanDBOptions(),
+    BlobGCJob blob_gc_job(&blob_gc, base_db_, tdb_, mutex_, TitanDBOptions(),
                           GetParam(), Env::Default(), EnvOptions(), nullptr,
                           blob_file_set_, nullptr, nullptr, nullptr);
     bool discardable = false;

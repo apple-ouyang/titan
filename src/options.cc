@@ -35,6 +35,7 @@ TitanCFOptions::TitanCFOptions(const ColumnFamilyOptions& cf_opts,
     : ColumnFamilyOptions(cf_opts),
       min_blob_size(immutable_opts.min_blob_size),
       blob_file_compression(immutable_opts.blob_file_compression),
+      blob_file_delta_compression(immutable_opts.blob_file_delta_compression),
       blob_file_target_size(immutable_opts.blob_file_target_size),
       blob_cache(immutable_opts.blob_cache),
       max_gc_batch_size(immutable_opts.max_gc_batch_size),
@@ -71,6 +72,16 @@ void TitanCFOptions::Dump(Logger* logger) const {
                    blob_file_compression_options.max_dict_bytes);
   TITAN_LOG_HEADER(logger, "    zstd_max_train_bytes : %" PRIu32,
                    blob_file_compression_options.zstd_max_train_bytes);
+
+  std::string delta_compression_str = "unknown";
+  for (auto& delta_compression_type : delta_compression_type_string_map) {
+    if (delta_compression_type.second == blob_file_delta_compression) {
+      delta_compression_str = delta_compression_type.first;
+      break;
+    }
+  }
+  TITAN_LOG_HEADER(logger, "TitanCFOptions.blob_file_delta_compression  : %s",
+                   delta_compression_str.c_str());
   TITAN_LOG_HEADER(logger,
                    "TitanCFOptions.blob_file_target_size        : %" PRIu64,
                    blob_file_target_size);
