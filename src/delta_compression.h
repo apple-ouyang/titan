@@ -139,13 +139,6 @@ enum DeltaCompressType : unsigned char {
   kGDelta = 3  // faster and higher compression ratio than Xdelta
 };
 
-std::unordered_map<std::string, DeltaCompressType>
-    delta_compression_type_string_map = {
-        {"kNoDeltaCompression", kNoDeltaCompression},
-        {"kXDelta", kXDelta},
-        {"kEDelta", kEDelta},
-        {"kGDelta", kGDelta}};
-
 // Returns true if:
 // (1) the compression method is supported in this platform and
 // (2) the compression rate is "good enough".

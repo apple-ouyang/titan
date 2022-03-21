@@ -74,7 +74,8 @@ void TitanCFOptions::Dump(Logger* logger) const {
                    blob_file_compression_options.zstd_max_train_bytes);
 
   std::string delta_compression_str = "unknown";
-  for (auto& delta_compression_type : delta_compression_type_string_map) {
+  for (auto &delta_compression_type :
+       TitanOptionsHelper::delta_compression_type_string_map) {
     if (delta_compression_type.second == blob_file_delta_compression) {
       delta_compression_str = delta_compression_type.first;
       break;
@@ -123,5 +124,11 @@ std::unordered_map<std::string, TitanBlobRunMode>
         {"kReadOnly", TitanBlobRunMode::kReadOnly},
         {"kFallback", TitanBlobRunMode::kFallback}};
 
+std::unordered_map<std::string, DeltaCompressType>
+    TitanOptionsHelper::delta_compression_type_string_map = {
+        {"kNoDeltaCompression", kNoDeltaCompression},
+        {"kXDelta", kXDelta},
+        {"kEDelta", kEDelta},
+        {"kGDelta", kGDelta}};
 }  // namespace titandb
 }  // namespace rocksdb

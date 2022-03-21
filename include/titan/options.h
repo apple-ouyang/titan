@@ -64,6 +64,8 @@ struct TitanOptionsHelper {
   static std::map<TitanBlobRunMode, std::string> blob_run_mode_to_string;
   static std::unordered_map<std::string, TitanBlobRunMode>
       blob_run_mode_string_map;
+  static std::unordered_map<std::string, DeltaCompressType>
+      delta_compression_type_string_map;
 };
 
 static auto& blob_run_mode_to_string =
