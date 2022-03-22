@@ -151,7 +151,6 @@ size_t BlobGCJob::IterateDeltasUnderBase(
     metrics_.gc_bytes_read += index.blob_handle.size;
 
     assert(type == kDeltaRecord);
-    assert(info.base_index == index);
 
     bool discardable = false;
     Status s = DiscardEntry(gc_iter->key(), index, &discardable);
@@ -336,8 +335,8 @@ Status BlobGCJob::DoRunGC() {
     }
     BlobIndexDeltaInfo index_info = gc_iter->GetBlobIndexDeltaInfo();
     BlobIndex blob_index = index_info.index;
-    DeltaInfo info = index_info.info;
-    BlobType type = info.flag.GetBlobType();
+    BlobType type = index_info.info.flag.GetBlobType();
+    uint16_t base_ref = index_info.info.reference;
     // count read bytes for blob record of gc candidate files
     metrics_.gc_bytes_read += blob_index.blob_handle.size;
 
@@ -356,7 +355,7 @@ Status BlobGCJob::DoRunGC() {
     if (!s.ok()) {
       break;
     }
-    DiscardBaseEntry(info, &discardable);
+    DiscardBaseEntry(type, base_ref, &discardable);
     
     if (discardable) {
       metrics_.gc_num_keys_overwritten++;
@@ -411,7 +410,8 @@ Status BlobGCJob::DoRunGC() {
 
     // FIXME(haitao) 处理base的删除以及delta 的删除
     size_t good_delta_number = 0;
-    if (type == kBlobRecord) {
+    switch (type) {
+    case kBlobRecord: {
       // just rename similar_keys to deltas_keys to show its meaning
       vector<Slice> &similar_keys = deltas_keys;
       feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
@@ -424,14 +424,30 @@ Status BlobGCJob::DoRunGC() {
             DeltaFlag(kDeltaRecord,
                       blob_gc_->titan_cf_options().blob_file_delta_compression);
       }
-    } else if (type == kBaseRecord) {
-      const size_t kDeltasNumber = info.reference;
+      break;
+    }
+    case kBaseRecord: {
+      const size_t kDeltasNumber = base_ref;
       good_delta_number = IterateDeltasUnderBase(
-          gc_iter, kDeltasNumber, read_delta_keys, deltas_values,
-          delta_indexes, is_delta_ok, delta_info);
-      for(size_t i=0; i<kDeltasNumber; ++i){
+          gc_iter, kDeltasNumber, read_delta_keys, deltas_values, delta_indexes,
+          is_delta_ok, delta_info);
+      for (size_t i = 0; i < kDeltasNumber; ++i) {
         deltas_keys[i] = Slice(read_delta_keys[i]);
       }
+      break;
+    }
+    case kDeltaRecord: {
+      // When base is iterated, it will call IterateDeltasUnderBase and iterate
+      // all deltas below base. So this situation can't happen.
+      //TODO(haitao) 修改以下2处assert 为 Titan 的 log
+      assert(false);
+      break;
+    }
+    default: {
+      // wrong type
+      assert(false);
+      break;
+    }
     }
 
     // BlobRecordContext require key to be an internal key. We encode key to
@@ -589,10 +605,10 @@ Status BlobGCJob::DiscardEntry(const Slice& key, const BlobIndex& blob_index,
   return Status::OK();
 }
 
-inline void BlobGCJob::DiscardBaseEntry(const DeltaInfo &info,
+inline void BlobGCJob::DiscardBaseEntry(const BlobType type,
+                                        const uint16_t base_ref,
                                         bool *discardable) {
-  if (info.flag.GetBlobType() == kBaseRecord && *discardable == true &&
-      info.reference > 0) {
+  if (type == kBaseRecord && *discardable == true && base_ref > 0) {
     *discardable = false;
   }
 }

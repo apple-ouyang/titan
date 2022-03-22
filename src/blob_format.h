@@ -136,13 +136,7 @@ union DeltaFlag{
 
 struct DeltaInfo{
   DeltaFlag flag{};
-  uint16_t reference; // only delta record have this field
-  BlobIndex base_index; // only base record have this field
-
-  inline void EncodeBaseIndex(string *dst) const {
-    if (flag.GetBlobType() == kDeltaRecord)
-      base_index.EncodeTo(dst);
-  }
+  uint16_t reference; // only base record have this field
 };
 
 struct BlobIndexDeltaInfo{
@@ -156,10 +150,7 @@ struct BlobDeltaIndex : public BlobIndex{
   BlobDeltaIndex(BlobIndex index);
 
   void EncodeTo(std::string* dst) const;
-  //TODO(haitao) 能不能不要在这里定义
-  inline Status DecodeFromBehindBase(Slice* src){
-    return base_index.DecodeFrom(src);
-  }
+  inline Status DecodeFromBehindBase(Slice* src);
 };
 
 struct MergeBlobIndex : public BlobIndex {
@@ -169,10 +160,7 @@ struct MergeBlobIndex : public BlobIndex {
   void EncodeTo(std::string* dst) const;
   void EncodeToBase(std::string* dst) const;
   Status DecodeFrom(Slice* src);
-  //TODO(haitao) 为什么要修改这里？
-  inline Status DecodeFromBase(Slice* src){
-    return BlobIndex::DecodeFrom(src);
-  }
+  inline Status DecodeFromBase(Slice* src);
 
   bool operator==(const MergeBlobIndex& rhs) const;
 };

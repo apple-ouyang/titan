@@ -42,10 +42,8 @@ bool operator==(const BlobRecord& lhs, const BlobRecord& rhs) {
 
 void BlobEncoder::EncodeRecord(const BlobRecord& record, const DeltaInfo* delta_info) {
   record_buffer_.clear();
-  if(delta_info != nullptr)
-    delta_info->EncodeBaseIndex(&record_buffer_);
   record.EncodeTo(&record_buffer_);
-  EncodeSlice(record_buffer_);
+  EncodeSlice(record_buffer_, delta_info);
 }
 
 void BlobEncoder::EncodeSlice(const Slice& record, const DeltaInfo* delta_info) {
@@ -96,14 +94,6 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
 
   return Status::OK();
 }
-
-inline Status BlobDecoder::DecodeBaseIndex(Slice *src){
-  if(delta_info_.flag.GetBlobType() == kDeltaRecord){
-    return delta_info_.base_index.DecodeFrom(src);
-  }
-  return Status::OK();
-}
-
 Status BlobDecoder::DecodeRecord(Slice* src, BlobRecord* record,
                                  OwnedSlice* buffer) {
   TEST_SYNC_POINT_CALLBACK("BlobDecoder::DecodeRecord", &crc_);
@@ -115,21 +105,16 @@ Status BlobDecoder::DecodeRecord(Slice* src, BlobRecord* record,
     return Status::Corruption("BlobRecord", "checksum mismatch");
   }
 
-  Status s;
-  if(compression_ != kNoCompression){
-    UncompressionContext ctx(compression_);
-    UncompressionInfo info(ctx, *uncompression_dict_, compression_);
-    s = Uncompress(info, input, buffer);
-    if (!s.ok()) {
-      return s;
-    }
-    input = Slice(*buffer);
+  if (compression_ == kNoCompression) {
+    return DecodeInto(input, record);
   }
-  
-  s = DecodeBaseIndex(&input);
-  if(!s.ok())
+  UncompressionContext ctx(compression_);
+  UncompressionInfo info(ctx, *uncompression_dict_, compression_);
+  Status s = Uncompress(info, input, buffer);
+  if (!s.ok()) {
     return s;
-  return DecodeInto(input, record);
+  }
+  return DecodeInto(*buffer, record);
 }
 
 void BlobHandle::EncodeTo(std::string* dst) const {
@@ -199,9 +184,9 @@ void BlobDeltaIndex::EncodeTo(std::string *dst) const {
   base_index.EncodeTo(dst);
 }
 
-// inline Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
-//   return base_index.DecodeFrom(src);
-// }
+inline Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
+  return base_index.DecodeFrom(src);
+}
 
 void MergeBlobIndex::EncodeTo(std::string* dst) const {
   BlobIndex::EncodeTo(dst);
@@ -225,9 +210,9 @@ Status MergeBlobIndex::DecodeFrom(Slice* src) {
   return s;
 }
 
-// inline Status MergeBlobIndex::DecodeFromBase(Slice* src) {
-//   return BlobIndex::DecodeFrom(src);
-// }
+inline Status MergeBlobIndex::DecodeFromBase(Slice* src) {
+  return BlobIndex::DecodeFrom(src);
+}
 
 bool MergeBlobIndex::operator==(const MergeBlobIndex& rhs) const {
   return (source_file_number == rhs.source_file_number &&

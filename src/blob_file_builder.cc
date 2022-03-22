@@ -54,8 +54,6 @@ void BlobFileBuilder::Add(const BlobRecord& record,
   if (builder_state_ == BuilderState::kBuffered) {
     std::string record_str;
     // Encode to take ownership of underlying string.
-    if(delta_info != nullptr)
-      delta_info->EncodeBaseIndex(&record_str);
     record.EncodeTo(&record_str);
     sample_records_.emplace_back(record_str);
     sample_str_len_ += record_str.size();
