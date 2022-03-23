@@ -184,10 +184,6 @@ void BlobDeltaIndex::EncodeTo(std::string *dst) const {
   base_index.EncodeTo(dst);
 }
 
-inline Status BlobDeltaIndex::DecodeFromBehindBase(Slice *src) {
-  return base_index.DecodeFrom(src);
-}
-
 void MergeBlobIndex::EncodeTo(std::string* dst) const {
   BlobIndex::EncodeTo(dst);
   PutVarint64(dst, source_file_number);
@@ -210,7 +206,7 @@ Status MergeBlobIndex::DecodeFrom(Slice* src) {
   return s;
 }
 
-inline Status MergeBlobIndex::DecodeFromBase(Slice* src) {
+Status MergeBlobIndex::DecodeFromBase(Slice* src) {
   return BlobIndex::DecodeFrom(src);
 }
 

@@ -150,7 +150,9 @@ struct BlobDeltaIndex : public BlobIndex{
   BlobDeltaIndex(BlobIndex index);
 
   void EncodeTo(std::string* dst) const;
-  inline Status DecodeFromBehindBase(Slice* src);
+  inline Status DecodeFromBehindBase(Slice* src){
+  return base_index.DecodeFrom(src);
+}
 };
 
 struct MergeBlobIndex : public BlobIndex {
@@ -160,7 +162,7 @@ struct MergeBlobIndex : public BlobIndex {
   void EncodeTo(std::string* dst) const;
   void EncodeToBase(std::string* dst) const;
   Status DecodeFrom(Slice* src);
-  inline Status DecodeFromBase(Slice* src);
+  Status DecodeFromBase(Slice* src);
 
   bool operator==(const MergeBlobIndex& rhs) const;
 };
