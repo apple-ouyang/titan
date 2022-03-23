@@ -103,7 +103,7 @@ class BlobGCJob {
   Status DeleteInputBlobFiles();
 
   bool IsShutingDown();
-  size_t DeltaCompressSimilarRecords(const Slice &base,
+  size_t DeltaCompressRecords(const Slice &base,
                                      const vector<Slice> &similar_keys,
                                      vector<string> &deltas,
                                      vector<BlobIndex> &delta_indexes,

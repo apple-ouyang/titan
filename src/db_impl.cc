@@ -574,6 +574,7 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
     Status s = db_->Put(options, column_family, key, value);
     if(!s.ok()) 
       return s;
+    //TODO(haitao) 只有开启差量压缩算法的时候这里才需要相似索引，因此需要加一个if判断
     feature_idx_tbl.Put(key, value);
     return s;
   }

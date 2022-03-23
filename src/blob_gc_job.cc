@@ -5,6 +5,7 @@
 // #include "env/io_posix.h"
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
+#include "titan/options.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -85,13 +86,13 @@ class BlobGCJob::GarbageCollectionWriteCallback : public WriteCallback {
   uint64_t read_bytes_;
 };
 
-size_t BlobGCJob::DeltaCompressSimilarRecords(const Slice &base,
-                                              const vector<Slice> &similar_keys,
-                                              vector<string> &deltas,
-                                              vector<BlobIndex> &delta_indexes,
-                                              vector<bool> &is_delta_ok) {
+size_t BlobGCJob::DeltaCompressRecords(const Slice &base,
+                                       const vector<Slice> &keys,
+                                       vector<string> &deltas,
+                                       vector<BlobIndex> &delta_indexes,
+                                       vector<bool> &is_delta_ok) {
   size_t good_delta_number = 0;
-  const size_t kSimilarRecords = similar_keys.size();
+  const size_t kSimilarRecords = keys.size();
   deltas.resize(kSimilarRecords);
   delta_indexes.resize(kSimilarRecords);
   is_delta_ok.resize(kSimilarRecords, false);
@@ -99,22 +100,22 @@ size_t BlobGCJob::DeltaCompressSimilarRecords(const Slice &base,
   DeltaCompressType type =
       blob_gc_->titan_cf_options().blob_file_delta_compression;
 
-  for (size_t i = 0; i < similar_keys.size(); ++i) {
+  for (size_t i = 0; i < keys.size(); ++i) {
     PinnableSlice value;
     BlobRecord delta_record;
 
     Status s =
         titan_db_impl_->Get(ReadOptions(), blob_gc_->column_family_handle(),
-                            similar_keys[i], &value, &delta_indexes[i]);
+                            keys[i], &value, &delta_indexes[i]);
     if (!s.ok()) // TODO(haitao) 写个log
       continue;
 
-    assert(delta_indexes[i].type !=
-           BlobType::kDeltaRecord); // TODO(haitao) 写个log
+    // TODO(haitao) 写个log
+    assert(delta_indexes[i].type != BlobType::kDeltaRecord);
 
     // count written bytes for new blob record,
     // blob index's size is counted in `RewriteValidKeyToLSM`
-    metrics_.gc_bytes_written += value.size() + similar_keys[i].size();
+    metrics_.gc_bytes_written += value.size() + keys[i].size();
 
     bool good_compress = DeltaCompress(type, value, base, &deltas[i]);
     if (!good_compress) // TODO(haitao) 写个log
@@ -337,6 +338,8 @@ Status BlobGCJob::DoRunGC() {
     BlobIndex blob_index = index_info.index;
     BlobType type = index_info.info.flag.GetBlobType();
     uint16_t base_ref = index_info.info.reference;
+    DeltaCompressType delta_compress_type =
+        blob_gc_->titan_cf_options().blob_file_delta_compression;
     // count read bytes for blob record of gc candidate files
     metrics_.gc_bytes_read += blob_index.blob_handle.size;
 
@@ -412,17 +415,17 @@ Status BlobGCJob::DoRunGC() {
     size_t good_delta_number = 0;
     switch (type) {
     case kBlobRecord: {
-      // just rename similar_keys to deltas_keys to show its meaning
-      vector<Slice> &similar_keys = deltas_keys;
-      feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
-      // TODO(haitao)  暂时不考虑 base 是否还有相似记录，只压缩一次就行
-      if (similar_keys.size() > 0) {
-        good_delta_number = DeltaCompressSimilarRecords(
-            blob_record.value, similar_keys, deltas_values, delta_indexes,
-            is_delta_ok);
-        delta_info.flag =
-            DeltaFlag(kDeltaRecord,
-                      blob_gc_->titan_cf_options().blob_file_delta_compression);
+      if (delta_compress_type != kNoDeltaCompression) {
+        // just rename similar_keys to deltas_keys to show its meaning
+        vector<Slice> &similar_keys = deltas_keys;
+        feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
+        // TODO(haitao)  暂时不考虑 base 是否还有相似记录，只压缩一次就行
+        if (similar_keys.size() > 0) {
+          good_delta_number =
+              DeltaCompressRecords(blob_record.value, similar_keys,
+                                   deltas_values, delta_indexes, is_delta_ok);
+          delta_info.flag = DeltaFlag(kDeltaRecord, delta_compress_type);
+        }
       }
       break;
     }

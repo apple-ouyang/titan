@@ -69,7 +69,7 @@ public:
                                     vector<Slice> &similar_keys);
 
 private:
-  // TODO:除了链表还有什么高效的结构吗？
+  // TODO(haitao)除了链表还有什么高效的结构吗？
   map<super_feature_t, forward_list<string>> feature_key_tbl;
   map<string, SuperFeaturesSet> key_feature_tbl;
 
