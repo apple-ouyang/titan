@@ -9,7 +9,7 @@ set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
 set(EDELTA ${PROJECT_SOURCE_DIR}/third-party/edelta)
 
 if (NOT ROCKSDB_GIT_REPO)
-  set(ROCKSDB_GIT_REPO "https://github.com/pingcap/rocksdb.git")
+  set(ROCKSDB_GIT_REPO "https://github.com/tikv/rocksdb.git")
 endif()
 
 if (NOT ROCKSDB_GIT_BRANCH)
