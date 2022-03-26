@@ -229,7 +229,7 @@ void BlobGCJob::WriteDeltas(
       // Delete successfully compressed records from similar index tables to
       // ensure that no subsequent differential compression is performed
       if (is_delete_feature)
-        feature_idx_tbl.Delete(keys[i]);
+        feature_index_table.Delete(keys[i]);
     }
 }
 
@@ -365,7 +365,7 @@ Status BlobGCJob::DoRunGC() {
       metrics_.gc_bytes_overwritten += blob_index.blob_handle.size;
       //TODO(haitao) 如果base只能压缩一次的话这里就不用删除了。因为压缩的时候就删除了
       if(type != kDeltaRecord)
-        feature_idx_tbl.Delete(gc_iter->key());
+        feature_index_table.Delete(gc_iter->key());
       continue;
     }
 
@@ -418,7 +418,7 @@ Status BlobGCJob::DoRunGC() {
       if (delta_compress_type != kNoDeltaCompression) {
         // just rename similar_keys to deltas_keys to show its meaning
         vector<Slice> &similar_keys = deltas_keys;
-        feature_idx_tbl.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
+        feature_index_table.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
         // TODO(haitao)  暂时不考虑 base 是否还有相似记录，只压缩一次就行
         if (similar_keys.size() > 0) {
           good_delta_number =

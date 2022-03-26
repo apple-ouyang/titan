@@ -20,23 +20,24 @@
 namespace rocksdb {
 namespace titandb {
 
-FeatureIndexTable feature_idx_tbl;
+FeatureIndexTable feature_index_table;
 
-void FeatureIndexTable::DeleteFeaturesOfAKey(const string &key,
-                                             const SuperFeaturesSet &sfs) {
-  for (const auto &sf : sfs.super_features) {
-    assert(feature_key_tbl.find(sf) != feature_key_tbl.end());
+void FeatureIndexTable::DeleteFeaturesOfAKey(
+    const string &key, const SuperFeatures &super_features) {
+  for (const auto &sf : super_features.super_features) {
+    assert(feature_key_table.find(sf) != feature_key_table.end());
 
-    // 遍历单链表，找到对应的索引删除，然后立马退出
-    // 这里没有使用 forward_list.remove 是因为只可能有一个需要删除
+    // 遍历 super feature 对应的 keys 的单链表，找到 key
+    // 后删除，然后立马停止遍历 这里没有使用 forward_list.remove
+    // 是因为只可能有一个 key 需要删除 找到 key
     // 删除后直接退出即可，不用遍历全部链表
-    for (auto it = feature_key_tbl[sf].before_begin();
-         it != feature_key_tbl[sf].end();) {
+    for (auto it = feature_key_table[sf].before_begin();
+         it != feature_key_table[sf].end();) {
       auto nex = next(it);
       if (*nex == key) {
-        feature_key_tbl[sf].erase_after(it);
-        if (feature_key_tbl[sf].empty())
-          feature_key_tbl.erase(sf);
+        feature_key_table[sf].erase_after(it);
+        if (feature_key_table[sf].empty())
+          feature_key_table.erase(sf);
         break;
       }
       it = nex;
@@ -45,33 +46,38 @@ void FeatureIndexTable::DeleteFeaturesOfAKey(const string &key,
 }
 
 void FeatureIndexTable::Delete(const string &key) {
-  SuperFeaturesSet sfs = key_feature_tbl.at(key);
-  DeleteFeaturesOfAKey(key, sfs);
-  key_feature_tbl.erase(key);
+  SuperFeatures super_features;
+  if (GetSuperFeatures(key, &super_features)) {
+    ExecuteDelete(key, super_features);
+  }
 }
 
-void FeatureIndexTable::Delete(const Slice &key) { Delete(key.ToString()); }
+void FeatureIndexTable::ExecuteDelete(const string &key,
+                                      const SuperFeatures &super_features) {
+  DeleteFeaturesOfAKey(key, super_features);
+  key_feature_table.erase(key);
+}
 
 void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
-  auto it_start = key_feature_tbl.find(start.ToString());
-  auto it_end = key_feature_tbl.find(end.ToString());
+  auto it_start = key_feature_table.find(start.ToString());
+  auto it_end = key_feature_table.find(end.ToString());
   for (auto it = it_start; it != it_end; ++it) {
     DeleteFeaturesOfAKey(it->first, it->second);
   }
-  key_feature_tbl.erase(it_start, it_end);
+  key_feature_table.erase(it_start, it_end);
 }
 
 void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
   const string k = key.ToString();
-  if (IsKeyExist(k)) {
-    Delete(k);
-  }
+  SuperFeatures super_features;
+  // delete old feature if it exits
+  Delete(key);
 
-  FeatureSample fs;
-  auto sfs = fs.GenerateFeatures(value);
-  key_feature_tbl[k] = sfs;
-  for (const auto &sf : sfs.super_features) {
-    feature_key_tbl[sf].push_front(k);
+  FeatureSample feature_sample;
+  super_features = feature_sample.GenerateFeatures(value);
+  key_feature_table[k] = super_features;
+  for (const auto &sf : super_features.super_features) {
+    feature_key_table[sf].push_front(k);
   }
 }
 
@@ -80,15 +86,30 @@ Status FeatureIndexTable::Write(WriteBatch *updates) {
   return updates->Iterate(&hd);
 }
 
+bool FeatureIndexTable::GetSuperFeatures(const string &key,
+                                         SuperFeatures *super_features) {
+  auto it = key_feature_table.find(key);
+  if (it == key_feature_table.end()) {
+    return false;
+  } else {
+    if (super_features != nullptr)
+      *super_features = it->second;
+    return true;
+  }
+}
+
 uint32_t
 FeatureIndexTable::FindKeysOfSimilarRecords(const Slice &key,
                                             vector<Slice> &similar_keys) {
   similar_keys.clear();
+  SuperFeatures super_features;
   const string k = key.ToString();
-  SuperFeaturesSet sfs = key_feature_tbl.at(k);
+  if (!GetSuperFeatures(key, &super_features)) {
+    return 0;
+  }
 
-  for (const auto &sf : sfs.super_features) {
-    for (const string &similar_key : feature_key_tbl[sf]) {
+  for (const auto &sf : super_features.super_features) {
+    for (const string &similar_key : feature_key_table[sf]) {
       if (similar_key != k) {
         similar_keys.emplace_back(Slice(similar_key));
       }
@@ -135,19 +156,20 @@ void FeatureSample::OdessResemblanceDetect(const Slice &value) {
   }
 }
 
-void FeatureSample::IndexFeatures(SuperFeaturesSet *sfs) {
+void FeatureSample::GroupFeatures(SuperFeatures *super_features) {
   for (int i = 0; i < NUM_SUPER_FEATURE; ++i) {
     size_t group_len = features_num_ / NUM_SUPER_FEATURE;
-    sfs->super_features[i] = XXH64(&this->features_[i * group_len],
-                                   sizeof(*features_) * group_len, 0x7fcaf1);
+    super_features->super_features[i] =
+        XXH64(&this->features_[i * group_len], sizeof(*features_) * group_len,
+              0x7fcaf1);
   }
 }
 
-SuperFeaturesSet FeatureSample::GenerateFeatures(const Slice &value) {
-  this->OdessResemblanceDetect(value);
-  SuperFeaturesSet sfs;
-  IndexFeatures(&sfs);
-  return sfs;
+SuperFeatures FeatureSample::GenerateFeatures(const Slice &value) {
+  OdessResemblanceDetect(value);
+  SuperFeatures super_features;
+  GroupFeatures(&super_features);
+  return super_features;
 }
 
 bool XDelta_Compress(const char *input, size_t input_len, const char *base,

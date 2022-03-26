@@ -573,7 +573,7 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
     if(!s.ok()) 
       return s;
     //TODO(haitao) 只有开启差量压缩算法的时候这里才需要相似索引，因此需要加一个if判断
-    feature_idx_tbl.Put(key, value);
+    feature_index_table.Put(key, value);
     return s;
   }
 }
@@ -586,7 +586,7 @@ Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
     Status s = db_->Write(options, updates);
     if (!s.ok())
       return s;
-    feature_idx_tbl.Write(updates);
+    feature_index_table.Write(updates);
     return s;
   }
 }
@@ -594,7 +594,7 @@ Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
 Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
                            rocksdb::ColumnFamilyHandle* column_family,
                            const rocksdb::Slice& key) {
-  feature_idx_tbl.Delete(key);
+  feature_index_table.Delete(key);
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 

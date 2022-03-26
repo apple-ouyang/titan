@@ -9,13 +9,13 @@
 
 #pragma once
 
+#include "options/options_helper.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/write_batch_base.h"
-#include "util/xxhash.h"
-#include "util.h"
 #include "titan/options.h"
-#include "options/options_helper.h"
+#include "util.h"
+#include "util/xxhash.h"
 
 #include <cstdint>
 #include <forward_list>
@@ -39,7 +39,7 @@ typedef XXH64_hash_t super_feature_t;
 
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
-struct SuperFeaturesSet {
+struct SuperFeatures {
   super_feature_t super_features[NUM_SUPER_FEATURE];
 };
 
@@ -50,18 +50,16 @@ using std::vector;
 
 class FeatureIndexTable {
 public:
+  // generate the super features of the value
+  // index the key-feature
   void Put(const Slice &key, const Slice &value);
 
-  // Delete (key,3feature) pair and 3 (feature,key) pair
-  void Delete(const Slice &key);
+  // Delete (key,3 super feature) pair and 3 ( super feature,key) pairs
+  inline void Delete(const Slice &key) { Delete(key.ToString()); }
 
   void RangeDelete(const Slice &start, const Slice &end);
 
   Status Write(WriteBatch *updates);
-
-  bool inline IsKeyExist(const Slice &key) {
-    return IsKeyExist(key.ToString());
-  }
 
   // Find similar records' value by the key, put thoese similar records' keys in
   // the similar_keys. return the number of similar records.
@@ -70,17 +68,22 @@ public:
 
 private:
   // TODO(haitao)除了链表还有什么高效的结构吗？
-  map<super_feature_t, forward_list<string>> feature_key_tbl;
-  map<string, SuperFeaturesSet> key_feature_tbl;
+  map<super_feature_t, forward_list<string>> feature_key_table;
+  map<string, SuperFeatures> key_feature_table;
+
+  // return true if find the super features of the key
+  inline bool GetSuperFeatures(const Slice &key, SuperFeatures *sfs = nullptr) {
+    return GetSuperFeatures(key.ToString(), sfs);
+  }
 
   // Delete (key, 3feature) pair
-  void DeleteFeaturesOfAKey(const string &key, const SuperFeaturesSet &sfs);
+  void DeleteFeaturesOfAKey(const string &key, const SuperFeatures &sfs);
 
   void Delete(const string &key);
 
-  bool inline IsKeyExist(const string &key) {
-    return key_feature_tbl.find(key) != key_feature_tbl.end();
-  }
+  void ExecuteDelete(const string &key, const SuperFeatures &sfs);
+
+  bool GetSuperFeatures(const string &key, SuperFeatures *sfs = nullptr);
 };
 
 class FeatureHandle : public WriteBatch::Handler, public FeatureIndexTable {
@@ -106,7 +109,7 @@ public:
   FeatureSample(uint8_t features_num = 12);
   ~FeatureSample();
 
-  SuperFeaturesSet GenerateFeatures(const Slice &value);
+  SuperFeatures GenerateFeatures(const Slice &value);
 
 private:
   /**
@@ -125,7 +128,7 @@ private:
    * on each groups of feature to generate hash value as super feature.
    * @param sfs the generated super feature
    */
-  void IndexFeatures(SuperFeaturesSet *sfs);
+  void GroupFeatures(SuperFeatures *sfs);
 
   uint8_t features_num_;
   uint64_t *features_;
@@ -143,7 +146,7 @@ Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
                        const Slice &base, OwnedSlice *output);
 
 // 全局变量： TODO：暂时不知道放哪里
-extern FeatureIndexTable feature_idx_tbl;
+extern FeatureIndexTable feature_index_table;
 
 } // namespace titandb
 } // namespace rocksdb
