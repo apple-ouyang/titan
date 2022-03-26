@@ -1,5 +1,4 @@
 #include "blob_file_builder.h"
-#include "blob_format.h"
 
 namespace rocksdb {
 namespace titandb {

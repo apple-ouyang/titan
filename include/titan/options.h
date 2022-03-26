@@ -8,13 +8,6 @@
 namespace rocksdb {
 namespace titandb {
   
-enum DeltaCompressType : unsigned char {
-  kNoDeltaCompression = 0,
-  kXDelta = 1, // traditional delta compression algorithm
-  kEDelta = 2, // fastest but also low compression ratio
-  kGDelta = 3  // faster and higher compression ratio than Xdelta
-};
-
 struct TitanDBOptions : public DBOptions {
   // The directory to store data specific to TitanDB alongside with
   // the base DB.
@@ -94,10 +87,6 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   CompressionType blob_file_compression{kNoCompression};
 
   // The delta compression algorithm used to compress data in blob files.
-  // speed:               edelta > gdelta > xdelta
-  // compression ratio:   gdelta > xdelta > edelta
-  // default:             kNoDeltaCompression
-  // recommend:           kGdelta
   // 
   // Default: kNoDeltaCompression
   DeltaCompressType blob_file_delta_compression{kNoDeltaCompression};

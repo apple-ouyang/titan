@@ -82,6 +82,8 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
 }
 
 Status FeatureIndexTable::Write(WriteBatch *updates) {
+  //TODO(haitao) 确定可以吗？可以写batch？
+  //TODO(haitao) 会不会被其他函数调用过导致重复写index？比如Put、Delte调用write？
   FeatureHandle hd;
   return updates->Iterate(&hd);
 }

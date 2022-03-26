@@ -1,6 +1,4 @@
 #include "db_impl.h"
-#include "blob_format.h"
-#include "util.h"
 #include <cassert>
 
 #ifndef __STDC_FORMAT_MACROS
@@ -572,29 +570,38 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
     Status s = db_->Put(options, column_family, key, value);
     if(!s.ok()) 
       return s;
-    //TODO(haitao) 只有开启差量压缩算法的时候这里才需要相似索引，因此需要加一个if判断
-    feature_index_table.Put(key, value);
+    DeltaCompressType type =
+        cf_info_[column_family->GetID()]
+            .immutable_cf_options.blob_file_delta_compression;
+    if(type != kNoDeltaCompression){}
+      feature_index_table.Put(key, value);
     return s;
   }
 }
 
 Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
                           rocksdb::WriteBatch* updates) {
-  if (HasBGError())
-    return GetBGError();
-  else {
-    Status s = db_->Write(options, updates);
-    if (!s.ok())
-      return s;
-    feature_index_table.Write(updates);
-    return s;
-  }
+  return HasBGError() ? GetBGError() : db_->Write(options, updates);
+  // if (HasBGError())
+  //   return GetBGError();
+  // else {
+  //   Status s = db_->Write(options, updates);
+  //   if (!s.ok())
+  //     return s;
+    // TODO(haitao) write 怎么增加判断差量压缩方法？
+    // feature_index_table.Write(updates);
+    // return s;
+  // }
 }
 
 Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
                            rocksdb::ColumnFamilyHandle* column_family,
                            const rocksdb::Slice& key) {
-  feature_index_table.Delete(key);
+  DeltaCompressType type =
+      cf_info_[column_family->GetID()]
+          .immutable_cf_options.blob_file_delta_compression;
+  if (type != kNoDeltaCompression)
+    feature_index_table.Delete(key);
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 

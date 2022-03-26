@@ -1,15 +1,6 @@
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
-#include "blob_format.h"
-#include "db_impl.h"
 // #include "env/io_posix.h"
-#include "rocksdb/db.h"
-#include "rocksdb/options.h"
-#include "titan/options.h"
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 #endif
 #include "blob_gc_job.h"
 

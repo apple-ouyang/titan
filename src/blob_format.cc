@@ -1,13 +1,7 @@
 #include "blob_format.h"
 
-#include "delta_compression.h"
-#include "rocksdb/options.h"
-#include "rocksdb/slice.h"
-#include "rocksdb/status.h"
 #include "test_util/sync_point.h"
-#include "util/coding.h"
 #include "util/crc32c.h"
-#include <cstddef>
 
 namespace rocksdb {
 namespace titandb {
@@ -94,6 +88,7 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
 
   return Status::OK();
 }
+
 Status BlobDecoder::DecodeRecord(Slice* src, BlobRecord* record,
                                  OwnedSlice* buffer) {
   TEST_SYNC_POINT_CALLBACK("BlobDecoder::DecodeRecord", &crc_);

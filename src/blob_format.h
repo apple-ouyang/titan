@@ -1,6 +1,5 @@
 #pragma once
 
-#include "db/dbformat.h"
 #include "delta_compression.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
@@ -8,8 +7,6 @@
 #include "rocksdb/types.h"
 #include "table/format.h"
 #include "util.h"
-#include <cstddef>
-#include <cstdint>
 
 namespace rocksdb {
 namespace titandb {
@@ -31,7 +28,7 @@ namespace titandb {
 // For now, the only kind of meta block is an optional uncompression dictionary
 // indicated by a flag in the file header.
 
-// Format of blob head (10 bytes):
+// Format of blob head (12 bytes):
 //
 //    +---------+---------+-------------+------------+-------------+
 //    |   crc   |  size   | compression | delta_flag |  reference  |
@@ -170,8 +167,9 @@ struct MergeBlobIndex : public BlobIndex {
 class BlobEncoder {
 public:
   BlobEncoder(CompressionType compression, CompressionOptions compression_opt,
-              const CompressionDict *compression_dict)
-      : compression_opt_(compression_opt), compression_ctx_(compression),
+              const CompressionDict* compression_dict)
+      : compression_opt_(compression_opt),
+        compression_ctx_(compression),
         compression_dict_(compression_dict),
         compression_info_(new CompressionInfo(
             compression_opt_, compression_ctx_, *compression_dict_, compression,
@@ -180,7 +178,7 @@ public:
       : BlobEncoder(compression, CompressionOptions(),
                     &CompressionDict::GetEmptyDict()) {}
   BlobEncoder(CompressionType compression,
-              const CompressionDict *compression_dict)
+              const CompressionDict* compression_dict)
       : BlobEncoder(compression, CompressionOptions(), compression_dict) {}
   BlobEncoder(CompressionType compression, CompressionOptions compression_opt)
       : BlobEncoder(compression, compression_opt,
@@ -189,7 +187,7 @@ public:
   void EncodeRecord(const BlobRecord &record,
                     const DeltaInfo *delta_info = nullptr);
   void EncodeSlice(const Slice &record, const DeltaInfo *delta_info = nullptr);
-  void SetCompressionDict(const CompressionDict *compression_dict) {
+  void SetCompressionDict(const CompressionDict* compression_dict) {
     compression_dict_ = compression_dict;
     compression_info_.reset(new CompressionInfo(
         compression_opt_, compression_ctx_, *compression_dict_,
@@ -208,7 +206,7 @@ private:
   std::string compressed_buffer_;
   CompressionOptions compression_opt_;
   CompressionContext compression_ctx_;
-  const CompressionDict *compression_dict_;
+  const CompressionDict* compression_dict_;
   std::unique_ptr<CompressionInfo> compression_info_;
 
   void EncodeHeader(CompressionType compression,
@@ -225,7 +223,7 @@ class BlobDecoder {
       : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
 
   Status DecodeHeader(Slice* src);
-  Status DecodeRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer);
+  Status DecodeRecord(Slice* src, BlobRecord* record, OwnedSlice* buffer);
 
   void SetUncompressionDict(const UncompressionDict* uncompression_dict) {
     uncompression_dict_ = uncompression_dict;
