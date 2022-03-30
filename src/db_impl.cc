@@ -573,7 +573,7 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
     DeltaCompressType type =
         cf_info_[column_family->GetID()]
             .immutable_cf_options.blob_file_delta_compression;
-    if(type != kNoDeltaCompression){}
+    if(type != kNoDeltaCompression)
       feature_index_table.Put(key, value);
     return s;
   }

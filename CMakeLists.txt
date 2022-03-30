@@ -8,6 +8,8 @@ set(GDELTA ${PROJECT_SOURCE_DIR}/third-party/gdelta/)
 set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
 set(EDELTA ${PROJECT_SOURCE_DIR}/third-party/edelta)
 
+add_compile_options(-g -Wno-error)
+
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/tikv/rocksdb.git")
 endif()
@@ -135,7 +137,10 @@ if (WITH_TITAN_TESTS AND (NOT CMAKE_BUILD_TYPE STREQUAL "Release"))
   set(TEST_LIBS
         ${COMMON_LIBS}
         testutillib
-        gtest)
+        gtest
+        boost_filesystem
+        boost_system
+        pthread)
 
   foreach(test ${TESTS})
     add_executable(titan_${test} src/${test}.cc $<TARGET_OBJECTS:testharness>)
@@ -183,7 +188,7 @@ install(DIRECTORY include/titan
   COMPONENT devel
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
-install(TARGETS titan
+install(TARGETS titan xdelta gdelta edelta
   COMPONENT devel
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"

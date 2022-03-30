@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include "options/options_helper.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/write_batch_base.h"
@@ -18,8 +17,9 @@
 #include "util/xxhash.h"
 
 #include <cstdint>
-#include <forward_list>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace rocksdb {
@@ -43,8 +43,9 @@ struct SuperFeatures {
   super_feature_t super_features[NUM_SUPER_FEATURE];
 };
 
-using std::forward_list;
 using std::map;
+using std::unordered_map;
+using std::unordered_set;
 using std::string;
 using std::vector;
 
@@ -61,29 +62,20 @@ public:
 
   Status Write(WriteBatch *updates);
 
-  // Find similar records' value by the key, put thoese similar records' keys in
-  // the similar_keys. return the number of similar records.
-  uint32_t FindKeysOfSimilarRecords(const Slice &key,
-                                    vector<Slice> &similar_keys);
+  // Use key to find all similar records by searching the key-feature table.
+  // After that, remove key from the key-feature table
+  uint32_t GetSimilarRecordsKeys(const Slice &key,
+                                    vector<string> &similar_keys);
 
 private:
-  // TODO(haitao)除了链表还有什么高效的结构吗？
-  map<super_feature_t, forward_list<string>> feature_key_table;
+  unordered_map<super_feature_t, unordered_set<string>> feature_key_table;
   map<string, SuperFeatures> key_feature_table;
-
-  // return true if find the super features of the key
-  inline bool GetSuperFeatures(const Slice &key, SuperFeatures *sfs = nullptr) {
-    return GetSuperFeatures(key.ToString(), sfs);
-  }
-
-  // Delete (key, 3feature) pair
-  void DeleteFeaturesOfAKey(const string &key, const SuperFeatures &sfs);
 
   void Delete(const string &key);
 
-  void ExecuteDelete(const string &key, const SuperFeatures &sfs);
+  void ExecuteDelete(const string &key, const SuperFeatures &super_features);
 
-  bool GetSuperFeatures(const string &key, SuperFeatures *sfs = nullptr);
+  bool GetSuperFeatures(const string &key, SuperFeatures *super_features);
 };
 
 class FeatureHandle : public WriteBatch::Handler, public FeatureIndexTable {
@@ -126,9 +118,9 @@ private:
   /**
    * @description: Divide the features into NUM_SUPER_FEATURE groups. Use xxhash
    * on each groups of feature to generate hash value as super feature.
-   * @param sfs the generated super feature
+   * @param super_features the generated super feature
    */
-  void GroupFeatures(SuperFeatures *sfs);
+  void GroupFeatures(SuperFeatures *super_features);
 
   uint8_t features_num_;
   uint64_t *features_;

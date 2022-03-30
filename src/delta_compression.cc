@@ -15,35 +15,13 @@
 #include "util/xxhash.h"
 #include "xdelta3.h"
 #include <cstdint>
+#include <iostream>
 #include <random>
 
 namespace rocksdb {
 namespace titandb {
 
 FeatureIndexTable feature_index_table;
-
-void FeatureIndexTable::DeleteFeaturesOfAKey(
-    const string &key, const SuperFeatures &super_features) {
-  for (const auto &sf : super_features.super_features) {
-    assert(feature_key_table.find(sf) != feature_key_table.end());
-
-    // 遍历 super feature 对应的 keys 的单链表，找到 key
-    // 后删除，然后立马停止遍历 这里没有使用 forward_list.remove
-    // 是因为只可能有一个 key 需要删除 找到 key
-    // 删除后直接退出即可，不用遍历全部链表
-    for (auto it = feature_key_table[sf].before_begin();
-         it != feature_key_table[sf].end();) {
-      auto nex = next(it);
-      if (*nex == key) {
-        feature_key_table[sf].erase_after(it);
-        if (feature_key_table[sf].empty())
-          feature_key_table.erase(sf);
-        break;
-      }
-      it = nex;
-    }
-  }
-}
 
 void FeatureIndexTable::Delete(const string &key) {
   SuperFeatures super_features;
@@ -54,15 +32,21 @@ void FeatureIndexTable::Delete(const string &key) {
 
 void FeatureIndexTable::ExecuteDelete(const string &key,
                                       const SuperFeatures &super_features) {
-  DeleteFeaturesOfAKey(key, super_features);
+  for (const auto &sf : super_features.super_features) {
+    feature_key_table[sf].erase(key);
+  }
   key_feature_table.erase(key);
 }
 
 void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
   auto it_start = key_feature_table.find(start.ToString());
   auto it_end = key_feature_table.find(end.ToString());
-  for (auto it = it_start; it != it_end; ++it) {
-    DeleteFeaturesOfAKey(it->first, it->second);
+  for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
+    auto key = key_feature->first;
+    auto features = key_feature->second;
+    for(auto f:features.super_features){
+      feature_key_table[f].erase(key);
+    }
   }
   key_feature_table.erase(it_start, it_end);
 }
@@ -70,20 +54,21 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
 void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
   const string k = key.ToString();
   SuperFeatures super_features;
-  // delete old feature if it exits
-  Delete(key);
+  // delete old feature if it exits so we can insert a new one
+  Delete(k);
 
   FeatureSample feature_sample;
   super_features = feature_sample.GenerateFeatures(value);
   key_feature_table[k] = super_features;
   for (const auto &sf : super_features.super_features) {
-    feature_key_table[sf].push_front(k);
+    feature_key_table[sf].emplace(k);
   }
 }
 
 Status FeatureIndexTable::Write(WriteBatch *updates) {
-  //TODO(haitao) 确定可以吗？可以写batch？
-  //TODO(haitao) 会不会被其他函数调用过导致重复写index？比如Put、Delte调用write？
+  // TODO(haitao) 确定可以吗？可以写batch？
+  // TODO(haitao)
+  // 会不会被其他函数调用过导致重复写index？比如Put、Delte调用write？
   FeatureHandle hd;
   return updates->Iterate(&hd);
 }
@@ -94,29 +79,32 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
   if (it == key_feature_table.end()) {
     return false;
   } else {
-    if (super_features != nullptr)
-      *super_features = it->second;
+    *super_features = it->second;
     return true;
   }
 }
 
 uint32_t
-FeatureIndexTable::FindKeysOfSimilarRecords(const Slice &key,
-                                            vector<Slice> &similar_keys) {
+FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
+                                         vector<string> &similar_keys) {
   similar_keys.clear();
   SuperFeatures super_features;
   const string k = key.ToString();
-  if (!GetSuperFeatures(key, &super_features)) {
+  if (!GetSuperFeatures(k, &super_features)) {
+    std::cout << "Key: " << key.ToString()
+              << " is not in the key-feature table!" << std::endl;
     return 0;
   }
 
   for (const auto &sf : super_features.super_features) {
     for (const string &similar_key : feature_key_table[sf]) {
       if (similar_key != k) {
-        similar_keys.emplace_back(Slice(similar_key));
+        similar_keys.emplace_back(move(similar_key));
       }
     }
   }
+
+  ExecuteDelete(k, super_features);
   return similar_keys.size();
 }
 
@@ -181,13 +169,17 @@ bool XDelta_Compress(const char *input, size_t input_len, const char *base,
   if (input_len == 0 || base_len == 0)
     return false;
   const size_t kMaxOutLen = input_len * 2;
-  output->resize(kMaxOutLen);
+  unsigned char *buff = new unsigned char[kMaxOutLen];
+  // output->resize(kMaxOutLen);
   size_t outlen;
-  int s =
-      xd3_encode_memory((uint8_t *)input, input_len, (uint8_t *)base, base_len,
-                        (uint8_t *)output->data(), &outlen, kMaxOutLen, 0);
-  output->resize(outlen);
-  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+  int s = xd3_encode_memory((uint8_t *)input, input_len, (uint8_t *)base,
+                            base_len, (uint8_t *)buff, &outlen, kMaxOutLen, 0);
+  output->clear();
+  *output = string(buff, buff + outlen);
+  delete[] buff;
+  // output->assign(buff, outlen);
+  // output->resize(outlen);
+  return s == 0;
 #else
   (void)input;
   (void)length;
@@ -223,13 +215,13 @@ bool EDelta_Compress(const char *input, size_t input_len, const char *base,
   if (input_len == 0 || base_len == 0)
     return false;
   const size_t kMaxOutLen = input_len * 2;
-  output->resize(kMaxOutLen);
-  size_t outlen;
-  int s = EDeltaEncode((uint8_t *)input, input_len, (uint8_t *)base,
-                       (uint32_t)base_len, (uint8_t *)output->data(),
-                       (uint32_t *)&outlen);
-  output->resize(outlen);
-  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+  unsigned char *buff = new unsigned char[kMaxOutLen];
+  uint32_t outlen = 0;
+  EDeltaEncode((uint8_t *)input, input_len, (uint8_t *)base, (uint32_t)base_len,
+               (uint8_t *)buff, &outlen);
+  *output = string(buff, buff + outlen);
+  delete[] buff;
+  return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
 #else
   (void)input;
   (void)length;
@@ -264,13 +256,14 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
   if (input_len == 0 || base_len == 0)
     return false;
   const size_t kMaxOutLen = input_len * 2;
-  output->resize(kMaxOutLen);
-  size_t outlen;
-  int s =
-      gencode((uint8_t *)input, input_len, (uint8_t *)base, (uint32_t)base_len,
-              (uint8_t *)output->data(), (uint32_t *)&outlen);
-  output->resize(outlen);
-  return s == 0; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
+  unsigned char *buff = new unsigned char[kMaxOutLen];
+  size_t outlen = 0;
+  uint32_t delta_size;
+  outlen = gencode((uint8_t *)input, input_len, (uint8_t *)base,
+                   (uint32_t)base_len, (uint8_t *)buff, &delta_size);
+  *output = string(buff, buff + outlen);
+  delete[] buff;
+  return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
 #else
   (void)input;
   (void)length;

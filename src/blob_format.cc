@@ -55,7 +55,7 @@ void BlobEncoder::EncodeHeader(CompressionType compression, const DeltaInfo* del
   header_[8] = compression;
 
   DeltaInfo info = (delta_info == nullptr)? DeltaInfo() : *delta_info;
-  header_[9] = info.flag.to_char;
+  header_[9] = info.flag.data;
   EncodeFixed16(header_ + 10, info.reference);
 
   uint32_t crc = crc32c::Value(header_ + 4, sizeof(header_) - 4);
@@ -71,7 +71,7 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
 
   unsigned char compression;
   if (!GetFixed32(src, &record_size_) || !GetChar(src, &compression) ||
-      !GetChar(src, &delta_info_.flag.to_char) ||
+      !GetChar(src, &delta_info_.flag.data) ||
       !GetFixed16(src, &delta_info_.reference)) {
     return Status::Corruption("BlobHeader");
   }

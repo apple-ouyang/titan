@@ -12,9 +12,15 @@
 #include "titan/options.h"
 #include "titan_stats.h"
 #include "version_edit.h"
+#include <cstdint>
+#include <vector>
+#include <string>
 
 namespace rocksdb {
 namespace titandb {
+
+using std::vector;
+using std::string;
 
 class BlobGCJob {
  public:
@@ -84,6 +90,9 @@ class BlobGCJob {
     uint64_t gc_sampling_micros = 0;
     uint64_t gc_read_lsm_micros = 0;
     uint64_t gc_update_lsm_micros = 0;
+    uint64_t gc_delta_compressed_record = 0;
+    uint64_t gc_before_delta_compressed_size = 0;
+    uint64_t gc_after_delta_compressed_size = 0;
   } metrics_;
 
   uint64_t prev_bytes_read_ = 0;
@@ -103,23 +112,21 @@ class BlobGCJob {
   Status DeleteInputBlobFiles();
 
   bool IsShutingDown();
-  size_t DeltaCompressRecords(const Slice &base,
-                                     const vector<Slice> &similar_keys,
-                                     vector<string> &deltas,
-                                     vector<BlobIndex> &delta_indexes,
-                                     vector<bool> &is_delta_ok);
+  size_t DeltaCompressRecords(const Slice &base, const vector<string> &keys,
+                              vector<string> &deltas,
+                              vector<BlobIndex> &delta_indexes,
+                              vector<bool> &is_delta_ok);
 
   size_t IterateDeltasUnderBase(std::unique_ptr<BlobFileMergeIterator> &gc_iter,
                                 const size_t kDeltasNumber,
                                 vector<string> &keys, vector<string> &values,
                                 vector<BlobIndex> &indexes,
                                 vector<bool> &is_delta_ok, DeltaInfo &info);
-  void WriteDeltas(const BlobIndex &new_base_index, const vector<Slice> &keys,
+  void WriteDeltas(const BlobIndex &new_base_index, const vector<string> &keys,
                    const vector<string> &values, vector<BlobIndex> &indexes,
                    const DeltaInfo *delta_info, vector<bool> &ok,
                    uint64_t write_file_number,
-                   const std::unique_ptr<BlobFileBuilder> &blob_file_builder,
-                   bool is_delete_feature);
+                   const std::unique_ptr<BlobFileBuilder> &blob_file_builder);
 };
 
 }  // namespace titandb

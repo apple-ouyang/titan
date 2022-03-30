@@ -7,6 +7,21 @@
 
 namespace rocksdb {
 namespace titandb {
+
+// Similar records can be delta compressed.
+// It needs two records to compress, a base record, and a record to be
+// compressed to delta. The delta is based on the baes record, using COPY ADD
+// method to show the difference between the delta and base
+// speed:               edelta > gdelta > xdelta
+// compression ratio:   gdelta > xdelta > edelta
+// default:             kNoDeltaCompression
+// recommend:           kGdelta
+enum DeltaCompressType : uint8_t {
+  kNoDeltaCompression = 0,
+  kXDelta = 1, // traditional delta compression algorithm
+  kEDelta = 2, // fastest but also low compression ratio
+  kGDelta = 3  // faster and higher compression ratio than Xdelta
+};
   
 struct TitanDBOptions : public DBOptions {
   // The directory to store data specific to TitanDB alongside with

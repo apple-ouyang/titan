@@ -1,12 +1,13 @@
 #pragma once
 
-#include "delta_compression.h"
+#include "titan/options.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
 #include "table/format.h"
 #include "util.h"
+#include <cstdint>
 
 namespace rocksdb {
 namespace titandb {
@@ -40,7 +41,7 @@ const uint64_t kBlobMaxHeaderSize = 12;
 const uint64_t kRecordHeaderSize = 12;
 const uint64_t kBlobFooterSize = BlockHandle::kMaxEncodedLength + 8 + 4;
 
-enum BlobType : unsigned char {
+enum BlobType : uint8_t {
   kBlobRecord = 0b00,
   kBaseRecord = 0b01,
   kDeltaRecord = 0b10
@@ -108,31 +109,45 @@ struct BlobIndex {
   bool operator==(const BlobIndex& rhs) const;
 };
 
-union DeltaFlag{
-  struct {
-    BlobType index_type : 2;
-    DeltaCompressType delta_compress_type : 6;
-  } flag = {kBlobRecord, kNoDeltaCompression};
-  unsigned char to_char;
+struct DeltaFlag{
+  static const uint8_t kBlobTypeShift = 6;
+  static const uint8_t kBlobTypeMask =      0b11000000;
+  static const uint8_t kCompressTypeMask =  0b00111111;
+  uint8_t data;
+
+  inline void SetBlobType(BlobType type){
+    data &= !kBlobTypeMask;
+    data |= type << kBlobTypeShift;
+  }
+
+  inline BlobType GetBlobType(){
+    uint8_t type = (data & kBlobTypeMask) >> kBlobTypeShift;
+    return static_cast<BlobType>(type);
+  }
+
+  inline void SetDeltaCompressType(DeltaCompressType type){
+    data &= !kCompressTypeMask;
+    data |= type;
+  }
+
+  inline DeltaCompressType GetDeltaCompressType(){
+    uint8_t type = data & kCompressTypeMask;
+    return static_cast<DeltaCompressType>(type);
+  }
 
   DeltaFlag(){
-    flag.index_type = kBlobRecord;
-    flag.delta_compress_type = kNoDeltaCompression;
+    SetBlobType(kBlobRecord);
+    SetDeltaCompressType(kNoDeltaCompression);
   }
   DeltaFlag(BlobType index, DeltaCompressType compress){
-    flag.index_type = index;
-    flag.delta_compress_type = compress;
-  }
-
-  inline BlobType GetBlobType() const { return this->flag.index_type; }
-  inline DeltaCompressType GetDeltaCompressType() const {
-    return this->flag.delta_compress_type;
+    SetBlobType(index);
+    SetDeltaCompressType(compress);
   }
 };
 
 
 struct DeltaInfo{
-  DeltaFlag flag{};
+  DeltaFlag flag;
   uint16_t reference; // only base record have this field
 };
 

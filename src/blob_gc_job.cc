@@ -78,7 +78,7 @@ class BlobGCJob::GarbageCollectionWriteCallback : public WriteCallback {
 };
 
 size_t BlobGCJob::DeltaCompressRecords(const Slice &base,
-                                       const vector<Slice> &keys,
+                                       const vector<string> &keys,
                                        vector<string> &deltas,
                                        vector<BlobIndex> &delta_indexes,
                                        vector<bool> &is_delta_ok) {
@@ -104,13 +104,20 @@ size_t BlobGCJob::DeltaCompressRecords(const Slice &base,
     // TODO(haitao) 写个log
     assert(delta_indexes[i].type != BlobType::kDeltaRecord);
 
+    metrics_.gc_before_delta_compressed_size += value.size();
+    ++metrics_.gc_delta_compressed_record;
     // count written bytes for new blob record,
     // blob index's size is counted in `RewriteValidKeyToLSM`
     metrics_.gc_bytes_written += value.size() + keys[i].size();
 
     bool good_compress = DeltaCompress(type, value, base, &deltas[i]);
-    if (!good_compress) // TODO(haitao) 写个log
+    if (!good_compress){
+      // TODO(haitao) 写个log
+      printf("Delta compress records fail! key=%s value.size=%zu\n",
+             keys[i].c_str(), value.size());
       continue;
+    } 
+    metrics_.gc_after_delta_compressed_size += deltas[i].size();
 
     ++good_delta_number;
     is_delta_ok[i] = true;
@@ -180,11 +187,10 @@ size_t BlobGCJob::IterateDeltasUnderBase(
 // based on X. So we read thoese deltas, find out the valid deltas, and write
 // thos valid deltas below the base
 void BlobGCJob::WriteDeltas(
-    const BlobIndex &new_base_index, const vector<Slice> &keys,
+    const BlobIndex &new_base_index, const vector<string> &keys,
     const vector<string> &values, vector<BlobIndex> &indexes,
     const DeltaInfo *delta_info, vector<bool> &ok, uint64_t write_file_number,
-    const std::unique_ptr<BlobFileBuilder> &blob_file_builder,
-    bool is_delete_feature) {
+    const std::unique_ptr<BlobFileBuilder> &blob_file_builder) {
   Status s;
   for (size_t i = 0; i < keys.size(); ++i)
     if (ok[i] == true) {
@@ -216,11 +222,6 @@ void BlobGCJob::WriteDeltas(
         assert(false);
         continue;
       }
-
-      // Delete successfully compressed records from similar index tables to
-      // ensure that no subsequent differential compression is performed
-      if (is_delete_feature)
-        feature_index_table.Delete(keys[i]);
     }
 }
 
@@ -354,9 +355,11 @@ Status BlobGCJob::DoRunGC() {
     if (discardable) {
       metrics_.gc_num_keys_overwritten++;
       metrics_.gc_bytes_overwritten += blob_index.blob_handle.size;
-      //TODO(haitao) 如果base只能压缩一次的话这里就不用删除了。因为压缩的时候就删除了
-      if(type != kDeltaRecord)
-        feature_index_table.Delete(gc_iter->key());
+      // TODO(haitao)
+      // 如果base只能压缩一次的话这里就不用删除了。因为压缩的时候就删除了
+      //  We don't need to delete records' feature in the feature index table.
+      //  Because when we call Put() or Delete(), the
+      //  feature have already been updated or deleted
       continue;
     }
 
@@ -395,8 +398,7 @@ Status BlobGCJob::DoRunGC() {
     // blob index's size is counted in `RewriteValidKeyToLSM`
     metrics_.gc_bytes_written += blob_record.size();
 
-    vector<Slice> deltas_keys;
-    vector<string> read_delta_keys;
+    vector<string> deltas_keys;
     vector<string> deltas_values;
     vector<BlobIndex> delta_indexes;
     vector<bool> is_delta_ok;
@@ -407,13 +409,11 @@ Status BlobGCJob::DoRunGC() {
     switch (type) {
     case kBlobRecord: {
       if (delta_compress_type != kNoDeltaCompression) {
-        // just rename similar_keys to deltas_keys to show its meaning
-        vector<Slice> &similar_keys = deltas_keys;
-        feature_index_table.FindKeysOfSimilarRecords(gc_iter->key(), similar_keys);
+        feature_index_table.GetSimilarRecordsKeys(gc_iter->key(), deltas_keys);
         // TODO(haitao)  暂时不考虑 base 是否还有相似记录，只压缩一次就行
-        if (similar_keys.size() > 0) {
+        if (deltas_keys.size() > 0) {
           good_delta_number =
-              DeltaCompressRecords(blob_record.value, similar_keys,
+              DeltaCompressRecords(blob_record.value, deltas_keys,
                                    deltas_values, delta_indexes, is_delta_ok);
           delta_info.flag = DeltaFlag(kDeltaRecord, delta_compress_type);
         }
@@ -423,11 +423,8 @@ Status BlobGCJob::DoRunGC() {
     case kBaseRecord: {
       const size_t kDeltasNumber = base_ref;
       good_delta_number = IterateDeltasUnderBase(
-          gc_iter, kDeltasNumber, read_delta_keys, deltas_values, delta_indexes,
+          gc_iter, kDeltasNumber, deltas_keys, deltas_values, delta_indexes,
           is_delta_ok, delta_info);
-      for (size_t i = 0; i < kDeltasNumber; ++i) {
-        deltas_keys[i] = Slice(read_delta_keys[i]);
-      }
       break;
     }
     case kDeltaRecord: {
@@ -469,7 +466,7 @@ Status BlobGCJob::DoRunGC() {
       BlobIndex new_base_index = contexts.back()->new_blob_index;
       WriteDeltas(new_base_index, deltas_keys, deltas_values, delta_indexes,
                   &delta_info, is_delta_ok, blob_file_handle->GetNumber(),
-                  blob_file_builder, type == kBlobRecord);
+                  blob_file_builder);
     }
     // TODO(haitao) 可以再次打开已经被打开的文件并写进去内容吗
     //  PosixRandomRWFile read_write_file(BlobFileName(titan_db_impl_->dirname_,
@@ -851,6 +848,13 @@ bool BlobGCJob::IsShutingDown() {
 }
 
 void BlobGCJob::UpdateInternalOpStats() {
+  printf("delta compress %zu records\n", metrics_.gc_delta_compressed_record);
+  printf("%zu bytes data are compressed to %zu byte\n",
+         metrics_.gc_before_delta_compressed_size,
+         metrics_.gc_after_delta_compressed_size);
+  printf("compression ratio is %.2f%%\n",
+         (double)metrics_.gc_before_delta_compressed_size /
+             metrics_.gc_after_delta_compressed_size);
   if (stats_ == nullptr) {
     return;
   }
@@ -883,6 +887,7 @@ void BlobGCJob::UpdateInternalOpStats() {
            metrics_.gc_read_lsm_micros);
   AddStats(internal_op_stats, InternalOpStatsType::GC_UPDATE_LSM_MICROS,
            metrics_.gc_update_lsm_micros);
+  //TODO(haitao) add stats
 }
 
 }  // namespace titandb
