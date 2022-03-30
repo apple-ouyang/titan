@@ -26,21 +26,20 @@ namespace rocksdb {
 
 namespace titandb {
 
-#define NUM_SUPER_FEATURE                                                      \
-  3 // Number of super features that each record will have.
+// Number of super features that each record will have.
+const size_t kSuperFeatureNumber = 3;
 
-#define SAMPLE_MASK                                                            \
-  0x0000400303410000 // It has 7 bits of 1's, so the sample rate is
-                     // 1/(2^7)=1/128. It means the number of sampled chunks to
-                     // generate feature will be 1/128 of the all sliding window
-                     // chunks.
+// The Mask has 7 bits of 1's, so the sample rate is 1/(2^7)=1/128. It means the
+// number of sampled chunks to generate feature will be 1/128 of the all sliding
+// window chunks.
+const uint64_t kSampleMask = 0x0000400303410000;
 
 typedef XXH64_hash_t super_feature_t;
 
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
 struct SuperFeatures {
-  super_feature_t super_features[NUM_SUPER_FEATURE];
+  super_feature_t super_features[kSuperFeatureNumber];
 };
 
 using std::map;
@@ -65,7 +64,7 @@ public:
   // Use key to find all similar records by searching the key-feature table.
   // After that, remove key from the key-feature table
   uint32_t GetSimilarRecordsKeys(const Slice &key,
-                                    vector<string> &similar_keys);
+                                 vector<string> &similar_keys);
 
 private:
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table;
@@ -96,7 +95,7 @@ public:
    * @description: Detect records similarity. Then we can use delta compression
    * to compress the similar values.
    * @param feature_num number of features to generate. should be multiply of
-   * NUM_SUPER_FEATURE.
+   * kSuperFeatureNumber.
    */
   FeatureSample(uint8_t features_num = 12);
   ~FeatureSample();
@@ -116,8 +115,8 @@ private:
   void OdessResemblanceDetect(const Slice &value);
 
   /**
-   * @description: Divide the features into NUM_SUPER_FEATURE groups. Use xxhash
-   * on each groups of feature to generate hash value as super feature.
+   * @description: Divide the features into kSuperFeatureNumber groups. Use
+   * xxhash on each groups of feature to generate hash value as super feature.
    * @param super_features the generated super feature
    */
   void GroupFeatures(SuperFeatures *super_features);

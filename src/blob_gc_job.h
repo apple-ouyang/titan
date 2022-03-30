@@ -47,6 +47,7 @@ class BlobGCJob {
  private:
   class GarbageCollectionWriteCallback;
   friend class BlobGCJobTest;
+  friend class DeltaCompressionTest;
 
   void UpdateInternalOpStats();
 

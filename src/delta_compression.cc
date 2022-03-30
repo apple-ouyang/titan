@@ -135,7 +135,7 @@ void FeatureSample::OdessResemblanceDetect(const Slice &value) {
   uint64_t hash = 0;
   for (size_t i = 0; i < value.size(); ++i) {
     hash = (hash << 1) + gear_matrix[static_cast<uint8_t>(value[i])];
-    if (!(hash & SAMPLE_MASK)) {
+    if (!(hash & kSampleMask)) {
       for (size_t j = 0; j < features_num_; ++j) {
         uint64_t transform_res =
             hash * transform_args_a_[j] + transform_args_b_[j];
@@ -147,8 +147,8 @@ void FeatureSample::OdessResemblanceDetect(const Slice &value) {
 }
 
 void FeatureSample::GroupFeatures(SuperFeatures *super_features) {
-  for (int i = 0; i < NUM_SUPER_FEATURE; ++i) {
-    size_t group_len = features_num_ / NUM_SUPER_FEATURE;
+  for (size_t i = 0; i < kSuperFeatureNumber; ++i) {
+    size_t group_len = features_num_ / kSuperFeatureNumber;
     super_features->super_features[i] =
         XXH64(&this->features_[i * group_len], sizeof(*features_) * group_len,
               0x7fcaf1);

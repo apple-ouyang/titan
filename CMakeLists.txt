@@ -133,7 +133,8 @@ if (WITH_TITAN_TESTS AND (NOT CMAKE_BUILD_TYPE STREQUAL "Release"))
         titan_options_test
         util_test
         compaction_filter_test
-        version_test)
+        version_test
+        delta_compression_test)
   set(TEST_LIBS
         ${COMMON_LIBS}
         testutillib

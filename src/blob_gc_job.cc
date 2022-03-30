@@ -1,7 +1,8 @@
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
-// #include "env/io_posix.h"
 #endif
+
+#include "titan/options.h"
 #include "blob_gc_job.h"
 
 #include <inttypes.h>
@@ -848,7 +849,18 @@ bool BlobGCJob::IsShutingDown() {
 }
 
 void BlobGCJob::UpdateInternalOpStats() {
-  printf("delta compress %zu records\n", metrics_.gc_delta_compressed_record);
+  DeltaCompressType type =
+      blob_gc_->titan_cf_options().blob_file_delta_compression;
+  std::string delta_compression_str = "unknown";
+  for (auto &delta_compression_type :
+       TitanOptionsHelper::delta_compression_type_string_map) {
+    if (delta_compression_type.second == type) {
+      delta_compression_str = delta_compression_type.first;
+      break;
+    }
+  }
+  printf("%s compress %zu records\n", delta_compression_str.c_str(),
+         metrics_.gc_delta_compressed_record);
   printf("%zu bytes data are compressed to %zu byte\n",
          metrics_.gc_before_delta_compressed_size,
          metrics_.gc_after_delta_compressed_size);

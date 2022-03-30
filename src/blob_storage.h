@@ -141,6 +141,7 @@ class BlobStorage {
   friend class VersionTest;
   friend class BlobGCPickerTest;
   friend class BlobGCJobTest;
+  friend class DeltaCompressionTest;
   friend class BlobFileSizeCollectorTest;
 
   void MarkFileObsoleteLocked(std::shared_ptr<BlobFileMeta> file,
