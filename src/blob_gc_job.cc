@@ -327,6 +327,7 @@ Status BlobGCJob::DoRunGC() {
       s = Status::ShutdownInProgress();
       break;
     }
+    metrics_.gc_num_processed_records++;
     BlobIndexDeltaInfo index_info = gc_iter->GetBlobIndexDeltaInfo();
     BlobIndex blob_index = index_info.index;
     BlobType type = index_info.info.flag.GetBlobType();
@@ -416,6 +417,7 @@ Status BlobGCJob::DoRunGC() {
           good_delta_number =
               DeltaCompressRecords(blob_record.value, deltas_keys,
                                    deltas_values, delta_indexes, is_delta_ok);
+          metrics_.gc_num_processed_records += good_delta_number;
           delta_info.flag = DeltaFlag(kDeltaRecord, delta_compress_type);
         }
       }
@@ -859,12 +861,14 @@ void BlobGCJob::UpdateInternalOpStats() {
       break;
     }
   }
-  printf("%s compress %zu records\n", delta_compression_str.c_str(),
-         metrics_.gc_delta_compressed_record);
-  printf("%zu bytes data are compressed to %zu byte\n",
+  printf("\n%6zu records have been garbage collected\n",
+         metrics_.gc_num_processed_records);
+  printf("%6zu similar records have been compressed by %s\n",
+         metrics_.gc_delta_compressed_record, delta_compression_str.c_str());
+  printf("%6zu bytes data are compressed to %zu byte\n",
          metrics_.gc_before_delta_compressed_size,
          metrics_.gc_after_delta_compressed_size);
-  printf("compression ratio is %.2f%%\n",
+  printf("%6.2f is the compression ratio\n",
          (double)metrics_.gc_before_delta_compressed_size /
              metrics_.gc_after_delta_compressed_size);
   if (stats_ == nullptr) {

@@ -91,6 +91,7 @@ class BlobGCJob {
     uint64_t gc_sampling_micros = 0;
     uint64_t gc_read_lsm_micros = 0;
     uint64_t gc_update_lsm_micros = 0;
+    uint64_t gc_num_processed_records = 0;
     uint64_t gc_delta_compressed_record = 0;
     uint64_t gc_before_delta_compressed_size = 0;
     uint64_t gc_after_delta_compressed_size = 0;

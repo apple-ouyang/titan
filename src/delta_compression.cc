@@ -44,7 +44,7 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
   for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
     auto key = key_feature->first;
     auto features = key_feature->second;
-    for(auto f:features.super_features){
+    for (auto f : features.super_features) {
       feature_key_table[f].erase(key);
     }
   }
@@ -84,6 +84,17 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
   }
 }
 
+size_t FeatureIndexTable::GetMaxNumberOfSiimlarRecords() {
+  size_t num = 0;
+  for(auto it:feature_key_table){
+    auto keys = it.second;
+    if(keys.size() > 1){
+      num += keys.size() - 1;
+    }
+  }
+  return num;
+}
+
 uint32_t
 FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
                                          vector<string> &similar_keys) {
@@ -91,8 +102,6 @@ FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
   SuperFeatures super_features;
   const string k = key.ToString();
   if (!GetSuperFeatures(k, &super_features)) {
-    std::cout << "Key: " << key.ToString()
-              << " is not in the key-feature table!" << std::endl;
     return 0;
   }
 

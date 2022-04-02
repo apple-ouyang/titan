@@ -32,7 +32,9 @@ const size_t kSuperFeatureNumber = 3;
 // The Mask has 7 bits of 1's, so the sample rate is 1/(2^7)=1/128. It means the
 // number of sampled chunks to generate feature will be 1/128 of the all sliding
 // window chunks.
-const uint64_t kSampleMask = 0x0000400303410000;
+// const uint64_t kSampleMask = 0x0000400303410000;
+
+const uint64_t kSampleMask =    0x0000000100000001;
 
 typedef XXH64_hash_t super_feature_t;
 
@@ -65,6 +67,8 @@ public:
   // After that, remove key from the key-feature table
   uint32_t GetSimilarRecordsKeys(const Slice &key,
                                  vector<string> &similar_keys);
+                                 
+  size_t GetMaxNumberOfSiimlarRecords();
 
 private:
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table;
