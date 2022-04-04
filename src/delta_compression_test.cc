@@ -1,7 +1,7 @@
 /*
  * @Author: Wang Haitao
  * @Date: 2022-03-30 15:11:47
- * @LastEditTime: 2022-04-01 19:29:24
+ * @LastEditTime: 2022-04-04 12:10:54
  * @LastEditors: Wang Haitao
  * @FilePath: /titan/src/delta_compression_test.cc
  * @Description: Github:https://github.com/apple-ouyang
@@ -313,7 +313,7 @@ public:
     printf("%6zu is the max number of similar records that can be delta "
            "compressed in this database\n",
            max_similar);
-    printf("%.2f percent records can be delta compressed\n",
+    printf("%.2f%% records can be delta compressed\n",
            (double)max_similar / total_records_ * 100);
   }
 

@@ -13,18 +13,18 @@
 #include "titan_stats.h"
 #include "version_edit.h"
 #include <cstdint>
-#include <vector>
 #include <string>
+#include <vector>
 
 namespace rocksdb {
 namespace titandb {
 
-using std::vector;
 using std::string;
+using std::vector;
 
 class BlobGCJob {
- public:
-  BlobGCJob(BlobGC *blob_gc, DB *db, TitanDBImpl* titan, port::Mutex *mutex,
+public:
+  BlobGCJob(BlobGC *blob_gc, DB *db, TitanDBImpl *titan, port::Mutex *mutex,
             const TitanDBOptions &titan_db_options, bool gc_merge_rewrite,
             Env *env, const EnvOptions &env_options,
             BlobFileManager *blob_file_manager, BlobFileSet *blob_file_set,
@@ -44,7 +44,7 @@ class BlobGCJob {
   // REQUIRE: mutex held
   Status Finish();
 
- private:
+private:
   class GarbageCollectionWriteCallback;
   friend class BlobGCJobTest;
   friend class DeltaCompressionTest;
@@ -114,21 +114,30 @@ class BlobGCJob {
   Status DeleteInputBlobFiles();
 
   bool IsShutingDown();
-  size_t DeltaCompressRecords(const Slice &base, const vector<string> &keys,
-                              vector<string> &deltas,
-                              vector<BlobIndex> &delta_indexes,
-                              vector<bool> &is_delta_ok);
+  Status DeltaCompressRecords(const Slice &base,
+                              const vector<string> &similar_keys,
+                              vector<string> &deltas_keys,
+                              vector<string> &deltas_value,
+                              vector<BlobIndex> &delta_indexes);
 
-  size_t IterateDeltasUnderBase(std::unique_ptr<BlobFileMergeIterator> &gc_iter,
+  // Find all delta records beneth the base record
+  // Save thoese valid delta records infomation
+  Status IterateDeltasUnderBase(std::unique_ptr<BlobFileMergeIterator> &gc_iter,
                                 const size_t kDeltasNumber,
                                 vector<string> &keys, vector<string> &values,
-                                vector<BlobIndex> &indexes,
-                                vector<bool> &is_delta_ok, DeltaInfo &info);
-  void WriteDeltas(const BlobIndex &new_base_index, const vector<string> &keys,
-                   const vector<string> &values, vector<BlobIndex> &indexes,
-                   const DeltaInfo *delta_info, vector<bool> &ok,
-                   uint64_t write_file_number,
-                   const std::unique_ptr<BlobFileBuilder> &blob_file_builder);
+                                vector<BlobIndex> &indexes);
+  // There is two source of deltas
+  // 1. the iterator get a kBlobRecord/kBaseRecord X, and the delta compression
+  // is on. so we find all the similar records of X, and delta compress them
+  // based on X. We call X baes and thoese compressed similar records as deltas.
+  // Then we write the base and the follwing deltas to the blob.
+  // 2. the iterator get a kBaseRecord X, meaning there should be some deltas
+  // based on X. So we read thoese deltas just below the base, dicard those
+  // invalid deltas, and write thos valid deltas below the base
+  Status WriteDeltas(const BlobIndex &new_base_index,
+                     const vector<string> &keys, const vector<string> &values,
+                     vector<BlobIndex> &indexes, uint64_t write_file_number,
+                     const std::unique_ptr<BlobFileBuilder> &blob_file_builder);
 };
 
 }  // namespace titandb

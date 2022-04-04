@@ -32,9 +32,9 @@ const size_t kSuperFeatureNumber = 3;
 // The Mask has 7 bits of 1's, so the sample rate is 1/(2^7)=1/128. It means the
 // number of sampled chunks to generate feature will be 1/128 of the all sliding
 // window chunks.
-// const uint64_t kSampleMask = 0x0000400303410000;
+const uint64_t kSampleMask = 0x0000400303410000;
 
-const uint64_t kSampleMask =    0x0000000100000001;
+// const uint64_t kSampleMask =    0x0000000100000001;
 
 typedef XXH64_hash_t super_feature_t;
 

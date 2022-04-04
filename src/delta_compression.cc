@@ -341,6 +341,10 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
   } // Do not recognize this compression type
   }
 
+  // TODO(haitao) 写个log
+  printf("Delta compress records fail! \nbase=%s\n value=%s\n\n",
+          base.ToString().c_str(), input.ToString().c_str());
+
   return false;
 }
 
