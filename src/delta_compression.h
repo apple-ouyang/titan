@@ -26,32 +26,85 @@ namespace rocksdb {
 
 namespace titandb {
 
-// Number of super features that each record will have.
-const size_t kSuperFeatureNumber = 3;
+using std::map;
+using std::string;
+using std::unordered_map;
+using std::unordered_set;
+using std::vector;
+
+typedef uint64_t feature_t;
+typedef XXH64_hash_t super_feature_t;
+typedef vector<super_feature_t> SuperFeatures;
 
 // The Mask has 7 bits of 1's, so the sample rate is 1/(2^7)=1/128. It means the
 // number of sampled chunks to generate feature will be 1/128 of the all sliding
 // window chunks.
-const uint64_t kSampleMask = 0x0000400303410000;
 
-// const uint64_t kSampleMask =    0x0000000100000001;
+// 1/(2^9)=1/512
+const feature_t k1_512RatioMask = 0x0100400303410010;
 
-typedef XXH64_hash_t super_feature_t;
+// 1/(2^8)=1/256
+const feature_t k1_256RatioMask = 0x0100400303410000;
 
+// 1/(2^7)=1/128
+const feature_t k1_128RatioMask = 0x0000400303410000;
+
+// 1/(2^2)=1/4
+const feature_t k1_4RatioMask = 0x0000000100000001;
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
-struct SuperFeatures {
-  super_feature_t super_features[kSuperFeatureNumber];
-};
 
-using std::map;
-using std::unordered_map;
-using std::unordered_set;
-using std::string;
-using std::vector;
+
+class FeatureGenerator {
+public:
+  static const feature_t kDefaultSampleRatioMask = 0x0000400303410000;
+  static const size_t kDefaultFeatureNumber = 12;
+  static const size_t kDefaultSuperFeatureNumber = 3;
+
+  /**
+   * @description: Detect records similarity. Then we can use delta compression
+   * to compress the similar values.
+   */
+  FeatureGenerator(feature_t sample_mask = kDefaultSampleRatioMask,
+                   size_t feature_number = kDefaultFeatureNumber,
+                   size_t super_feature_number = kDefaultSuperFeatureNumber);
+
+  SuperFeatures GenerateSuperFeatures(const Slice &value);
+
+private:
+  /**
+   * @summary: Use Odess method to calculate the features of a value. The
+   * feature is used to detect similarity.
+   * @description:  Use Gear hash to calculate the rolling hash of the values.
+   * Use content defined method to sample some of chunks hash values. Use
+   * different tramsformation methods to sample the hash value as the similarity
+   * feature. If two value has a same feature, we consider they are similar.
+   * @param &value the value of record.
+   */
+  void OdessResemblanceDetect(const Slice &value);
+
+  /**
+   * @description: Divide the features into kSuperFeatureNumber groups. Use
+   * xxhash on each groups of feature to generate hash value as super feature.
+   */
+  SuperFeatures GroupFeaturesAsSuperFeatures();
+
+  vector<feature_t> features_;
+  vector<feature_t> random_transform_args_a_;
+  vector<feature_t> random_transform_args_b_;
+
+  const feature_t kSampleRatioMask;
+  const size_t kFeatureNumber;
+  const size_t kSuperFeatureNumber;
+};
 
 class FeatureIndexTable {
 public:
+  FeatureIndexTable(){};
+  FeatureIndexTable(feature_t sample_mask, size_t feature_number,
+                    size_t super_feature_number)
+      : feature_generator_(sample_mask, feature_number, super_feature_number){};
+
   // generate the super features of the value
   // index the key-feature
   void Put(const Slice &key, const Slice &value);
@@ -67,12 +120,13 @@ public:
   // After that, remove key from the key-feature table
   uint32_t GetSimilarRecordsKeys(const Slice &key,
                                  vector<string> &similar_keys);
-                                 
+
   size_t GetMaxNumberOfSiimlarRecords();
 
 private:
-  unordered_map<super_feature_t, unordered_set<string>> feature_key_table;
-  map<string, SuperFeatures> key_feature_table;
+  unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;
+  map<string, SuperFeatures> key_feature_table_;
+  FeatureGenerator feature_generator_;
 
   void Delete(const string &key);
 
@@ -91,44 +145,6 @@ public:
   virtual void Delete(const Slice &key) override {
     FeatureIndexTable::Delete(key);
   }
-};
-
-class FeatureSample {
-public:
-  /**
-   * @description: Detect records similarity. Then we can use delta compression
-   * to compress the similar values.
-   * @param feature_num number of features to generate. should be multiply of
-   * kSuperFeatureNumber.
-   */
-  FeatureSample(uint8_t features_num = 12);
-  ~FeatureSample();
-
-  SuperFeatures GenerateFeatures(const Slice &value);
-
-private:
-  /**
-   * @summary: Use Odess method to calculate the features of a value. The
-   * feature is used to detect similarity.
-   * @description:  Use Gear hash to calculate the rolling hash of the values.
-   * Use content defined method to sample some of chunks hash values. Use
-   * different tramsformation methods to sample the hash value as the similarity
-   * feature. If two value has a same feature, we consider they are similar.
-   * @param &value the value of record.
-   */
-  void OdessResemblanceDetect(const Slice &value);
-
-  /**
-   * @description: Divide the features into kSuperFeatureNumber groups. Use
-   * xxhash on each groups of feature to generate hash value as super feature.
-   * @param super_features the generated super feature
-   */
-  void GroupFeatures(SuperFeatures *super_features);
-
-  uint8_t features_num_;
-  uint64_t *features_;
-  uint64_t *transform_args_a_; // random numbers
-  uint64_t *transform_args_b_;
 };
 
 // Returns true if:

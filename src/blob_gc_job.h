@@ -76,7 +76,7 @@ private:
 
   TitanStats *stats_;
 
-  struct {
+  struct Metrics{
     uint64_t gc_bytes_read = 0;
     uint64_t gc_bytes_written = 0;
     uint64_t gc_num_keys_overwritten = 0;

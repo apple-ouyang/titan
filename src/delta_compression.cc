@@ -32,23 +32,23 @@ void FeatureIndexTable::Delete(const string &key) {
 
 void FeatureIndexTable::ExecuteDelete(const string &key,
                                       const SuperFeatures &super_features) {
-  for (const auto &sf : super_features.super_features) {
-    feature_key_table[sf].erase(key);
+  for (const auto &sf : super_features) {
+    feature_key_table_[sf].erase(key);
   }
-  key_feature_table.erase(key);
+  key_feature_table_.erase(key);
 }
 
 void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
-  auto it_start = key_feature_table.find(start.ToString());
-  auto it_end = key_feature_table.find(end.ToString());
+  auto it_start = key_feature_table_.find(start.ToString());
+  auto it_end = key_feature_table_.find(end.ToString());
   for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
     auto key = key_feature->first;
-    auto features = key_feature->second;
-    for (auto f : features.super_features) {
-      feature_key_table[f].erase(key);
+    auto super_features = key_feature->second;
+    for (auto f : super_features) {
+      feature_key_table_[f].erase(key);
     }
   }
-  key_feature_table.erase(it_start, it_end);
+  key_feature_table_.erase(it_start, it_end);
 }
 
 void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
@@ -57,11 +57,10 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
   // delete old feature if it exits so we can insert a new one
   Delete(k);
 
-  FeatureSample feature_sample;
-  super_features = feature_sample.GenerateFeatures(value);
-  key_feature_table[k] = super_features;
-  for (const auto &sf : super_features.super_features) {
-    feature_key_table[sf].emplace(k);
+  super_features = feature_generator_.GenerateSuperFeatures(value);
+  key_feature_table_[k] = super_features;
+  for (const auto &sf : super_features) {
+    feature_key_table_[sf].emplace(k);
   }
 }
 
@@ -75,8 +74,8 @@ Status FeatureIndexTable::Write(WriteBatch *updates) {
 
 bool FeatureIndexTable::GetSuperFeatures(const string &key,
                                          SuperFeatures *super_features) {
-  auto it = key_feature_table.find(key);
-  if (it == key_feature_table.end()) {
+  auto it = key_feature_table_.find(key);
+  if (it == key_feature_table_.end()) {
     return false;
   } else {
     *super_features = it->second;
@@ -86,9 +85,9 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
 
 size_t FeatureIndexTable::GetMaxNumberOfSiimlarRecords() {
   size_t num = 0;
-  for(auto it:feature_key_table){
+  for (auto it : feature_key_table_) {
     auto keys = it.second;
-    if(keys.size() > 1){
+    if (keys.size() > 1) {
       num += keys.size() - 1;
     }
   }
@@ -105,8 +104,8 @@ FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
     return 0;
   }
 
-  for (const auto &sf : super_features.super_features) {
-    for (const string &similar_key : feature_key_table[sf]) {
+  for (const auto &sf : super_features) {
+    for (const string &similar_key : feature_key_table_[sf]) {
       if (similar_key != k) {
         similar_keys.emplace_back(move(similar_key));
       }
@@ -117,37 +116,35 @@ FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
   return similar_keys.size();
 }
 
-FeatureSample::FeatureSample(uint8_t features_num)
-    : features_num_(features_num) {
+FeatureGenerator::FeatureGenerator(uint64_t sample_mask, size_t feature_number,
+                                   size_t super_feature_number)
+    : kSampleRatioMask(sample_mask), kFeatureNumber(feature_number),
+      kSuperFeatureNumber(super_feature_number) {
+  assert(kFeatureNumber % kSuperFeatureNumber == 0);
+
   std::random_device rd;
   std::default_random_engine e(rd());
   std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
 
-  features_ = (uint64_t *)malloc(sizeof(uint64_t) * features_num_);
-  transform_args_a_ = (uint64_t *)malloc(sizeof(uint64_t) * features_num_);
-  transform_args_b_ = (uint64_t *)malloc(sizeof(uint64_t) * features_num_);
+  features_.resize(kFeatureNumber);
+  random_transform_args_a_.resize(kFeatureNumber);
+  random_transform_args_b_.resize(kFeatureNumber);
 
-  for (size_t i = 0; i < features_num_; ++i) {
-    transform_args_a_[i] = dis(e);
-    transform_args_b_[i] = dis(e);
+  for (size_t i = 0; i < kFeatureNumber; ++i) {
+    random_transform_args_a_[i] = dis(e);
+    random_transform_args_b_[i] = dis(e);
     features_[i] = 0;
   }
 }
 
-FeatureSample::~FeatureSample() {
-  free(features_);
-  free(transform_args_a_);
-  free(transform_args_b_);
-}
-
-void FeatureSample::OdessResemblanceDetect(const Slice &value) {
+void FeatureGenerator::OdessResemblanceDetect(const Slice &value) {
   uint64_t hash = 0;
   for (size_t i = 0; i < value.size(); ++i) {
     hash = (hash << 1) + gear_matrix[static_cast<uint8_t>(value[i])];
-    if (!(hash & kSampleMask)) {
-      for (size_t j = 0; j < features_num_; ++j) {
+    if (!(hash & kSampleRatioMask)) {
+      for (size_t j = 0; j < kFeatureNumber; ++j) {
         uint64_t transform_res =
-            hash * transform_args_a_[j] + transform_args_b_[j];
+            hash * random_transform_args_a_[j] + random_transform_args_b_[j];
         if (transform_res > features_[j])
           features_[j] = transform_res;
       }
@@ -155,20 +152,19 @@ void FeatureSample::OdessResemblanceDetect(const Slice &value) {
   }
 }
 
-void FeatureSample::GroupFeatures(SuperFeatures *super_features) {
+SuperFeatures FeatureGenerator::GroupFeaturesAsSuperFeatures() {
+  SuperFeatures super_features(kSuperFeatureNumber);
   for (size_t i = 0; i < kSuperFeatureNumber; ++i) {
-    size_t group_len = features_num_ / kSuperFeatureNumber;
-    super_features->super_features[i] =
-        XXH64(&this->features_[i * group_len], sizeof(*features_) * group_len,
-              0x7fcaf1);
+    size_t group_len = kFeatureNumber / kSuperFeatureNumber;
+    super_features[i] = XXH64(&this->features_[i * group_len],
+                              sizeof(feature_t) * group_len, 0x7fcaf1);
   }
+  return super_features;
 }
 
-SuperFeatures FeatureSample::GenerateFeatures(const Slice &value) {
+SuperFeatures FeatureGenerator::GenerateSuperFeatures(const Slice &value) {
   OdessResemblanceDetect(value);
-  SuperFeatures super_features;
-  GroupFeatures(&super_features);
-  return super_features;
+  return GroupFeaturesAsSuperFeatures();
 }
 
 bool XDelta_Compress(const char *input, size_t input_len, const char *base,
@@ -343,7 +339,7 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
 
   // TODO(haitao) 写个log
   printf("Delta compress records fail! \nbase=%s\n value=%s\n\n",
-          base.ToString().c_str(), input.ToString().c_str());
+         base.ToString().c_str(), input.ToString().c_str());
 
   return false;
 }
