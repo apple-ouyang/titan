@@ -79,6 +79,20 @@ class BlobGCJob::GarbageCollectionWriteCallback : public WriteCallback {
   uint64_t read_bytes_;
 };
 
+void AddElapsedTime(timespec &time, const timespec &start,
+                    const timespec &stop) {
+  time.tv_nsec += stop.tv_nsec - start.tv_nsec;
+  time.tv_sec += stop.tv_sec - start.tv_sec;
+  if (time.tv_nsec < 0) {
+    time.tv_nsec += 1000000000;
+    time.tv_sec--;
+  }
+  if (time.tv_nsec > 1000000000) {
+    time.tv_nsec -= 1000000000;
+    time.tv_sec++;
+  }
+}
+
 Status BlobGCJob::DeltaCompressRecords(const Slice &base,
                                        const vector<string> &similar_keys,
                                        vector<string> &deltas_keys,
@@ -105,13 +119,17 @@ Status BlobGCJob::DeltaCompressRecords(const Slice &base,
 
     // TODO(haitao) 写个log
     assert(index.type != BlobType::kDeltaRecord);
-    
+    struct timespec start, stop;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     if (!DeltaCompress(type, value, base, &delta)) {
+      metrics_.gc_delta_compressed_failed_number++;
       continue;
     }
+    clock_gettime(CLOCK_MONOTONIC, &stop);
     // count written bytes for new blob record,
     // blob index's size is counted in `RewriteValidKeyToLSM`
     metrics_.gc_bytes_written += delta.size() + similar_keys[i].size();
+    AddElapsedTime(metrics_.gc_delta_compressed_time, start, stop);
     ++metrics_.gc_delta_compressed_record;
     metrics_.gc_before_delta_compressed_size += value.size();
     metrics_.gc_after_delta_compressed_size += delta.size();
@@ -829,26 +847,6 @@ bool BlobGCJob::IsShutingDown() {
 }
 
 void BlobGCJob::UpdateInternalOpStats() {
-  DeltaCompressType type =
-      blob_gc_->titan_cf_options().blob_file_delta_compression;
-  std::string delta_compression_str = "unknown";
-  for (auto &delta_compression_type :
-       TitanOptionsHelper::delta_compression_type_string_map) {
-    if (delta_compression_type.second == type) {
-      delta_compression_str = delta_compression_type.first;
-      break;
-    }
-  }
-  printf("\n%6zu records have been garbage collected\n",
-         metrics_.gc_num_processed_records);
-  printf("%6zu similar records have been compressed by %s\n",
-         metrics_.gc_delta_compressed_record, delta_compression_str.c_str());
-  printf("%6zu bytes data are compressed to %zu byte\n",
-         metrics_.gc_before_delta_compressed_size,
-         metrics_.gc_after_delta_compressed_size);
-  printf("%6.2f is the compression ratio\n",
-         (double)metrics_.gc_before_delta_compressed_size /
-             metrics_.gc_after_delta_compressed_size);
   if (stats_ == nullptr) {
     return;
   }

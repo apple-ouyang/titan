@@ -1,7 +1,7 @@
 /*
  * @Author: Wang Haitao
  * @Date: 2022-03-30 15:11:47
- * @LastEditTime: 2022-04-08 18:08:15
+ * @LastEditTime: 2022-04-13 13:29:43
  * @LastEditors: Wang Haitao
  * @FilePath: /titan/src/delta_compression_test.cc
  * @Description: Github:https://github.com/apple-ouyang
@@ -18,6 +18,7 @@
 #include "titan/options.h"
 #include "utilities/transactions/write_prepared_txn_db.h"
 
+#include <bits/types/struct_timespec.h>
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
@@ -34,7 +35,7 @@ using namespace std;
 
 class DataReader {
 public:
-  DataReader(size_t expected_percentage)
+  DataReader(size_t expected_percentage = 100)
       : expected_percentage_(expected_percentage){};
   virtual ~DataReader(){};
 
@@ -97,17 +98,21 @@ public:
   }
 
   struct HumanReadable {
-    uintmax_t size{};
+    uintmax_t size_;
+    HumanReadable(size_t size = 0) : size_(size){};
 
   private:
     friend ostream &operator<<(ostream &os, HumanReadable hr) {
-      int i{};
-      double mantissa = hr.size;
-      for (; mantissa >= 1024.; mantissa /= 1024., ++i) {
+      int magnitude = 0;
+      double mantissa = hr.size_;
+      while (mantissa >= 1024) {
+        mantissa /= 1024.;
+        ++magnitude;
       }
+
       mantissa = ceil(mantissa * 10.) / 10.;
-      os << mantissa << "BKMGTPE"[i];
-      return i == 0 ? os : os << "B (" << hr.size << ')';
+      os << mantissa << "BKMGTPE"[magnitude];
+      return magnitude == 0 ? os : os << "B (" << hr.size_ << ')';
     }
   };
 
@@ -146,20 +151,18 @@ public:
   virtual void GetSimilarRecords() = 0;
 
   void PrintFinishInfo() {
-    printf("##################################################\n");
-    cout << total_records_ << " records have been put into titan databse!"
-         << endl;
-    cout << put_key_value_size_ << " of keys and values have been put" << endl;
-    cout << "Database is located in: " << data_directory_ << endl;
-    printf("%6zu is the max number of similar records that can be delta "
-           "compressed in this database\n",
-           max_similar_records_);
-    printf("%.2f%% records can be delta compressed\n",
+    printf("\n##################################################\n");
+    cout << total_records_ << " records have been put into titan databse!\n";
+    cout << put_key_value_size_ << " are the size of keys and values\n";
+    printf("%6zu (%.2f%%) is the number of similar records that can be delta "
+           "compressed\n",
+           max_similar_records_,
            (double)max_similar_records_ / total_records_ * 100);
-    printf("##################################################\n");
+    printf("##################################################\n\n");
+    fflush(stdout);
   }
 
-  void Fnish() {
+  void Finish() {
     GetSimilarRecords();
     PrintFinishInfo();
   }
@@ -213,7 +216,7 @@ public:
   void Put(const string &key, const string &value) {
     ExecutePut(key, value);
     ++total_records_;
-    put_key_value_size_.size += key.size() + value.size();
+    put_key_value_size_.size_ += key.size() + value.size();
   }
 
   void ReadFilesUnderDirectoryThenPut(const DataSetType type) {
@@ -318,24 +321,24 @@ public:
   inline void PutWikipediaData() {
     ReadDataPrepare(kWikipedia);
     ReadFilesUnderDirectoryThenPut(kWikipedia);
-    Fnish();
+    Finish();
   }
   inline void PutEnronMailData() {
     ReadDataPrepare(kEnronMail);
     ReadFilesUnderDirectoryThenPut(kEnronMail);
-    Fnish();
+    Finish();
   }
 
   void PutStackOverFlowData() {
     ReadDataPrepare(kStackOverFlow);
     ReadParseStackOverFlowDataAndPut();
-    Fnish();
+    Finish();
   }
 
   void PutStackOverFlowCommentData() {
     ReadDataPrepare(kStackOverFlowComment);
     ReadParseStackOverFlowCommentFileAndPut();
-    Fnish();
+    Finish();
   }
 
   size_t to_be_read_;
@@ -442,6 +445,21 @@ public:
     uint64_t delta_compressed_records_original_size = 0;
     uint64_t delta_compressed_records_delta_size = 0;
     string delta_compression_str = "unknown";
+    timespec gc_delta_compressed_time{};
+    uint64_t gc_delta_compressed_failed_number = 0;
+
+    void AddTimespec(timespec &time, const timespec &addtime) {
+      time.tv_sec += addtime.tv_sec;
+      time.tv_nsec += addtime.tv_nsec;
+      if (time.tv_nsec > 1000000000) {
+        time.tv_nsec -= 1000000000;
+        time.tv_sec++;
+      }
+    }
+
+    double TimespecToSeconds(const timespec &time) {
+      return time.tv_sec + time.tv_nsec / 1000000000.;
+    }
 
     void Update(const BlobGCJob::Metrics &metrics) {
       gc_processed_records += metrics.gc_num_processed_records;
@@ -450,6 +468,9 @@ public:
       delta_compressed_records_delta_size +=
           metrics.gc_after_delta_compressed_size;
       delta_compressed_records_num += metrics.gc_delta_compressed_record;
+      gc_delta_compressed_failed_number +=
+          metrics.gc_delta_compressed_failed_number;
+      AddTimespec(gc_delta_compressed_time, metrics.gc_delta_compressed_time);
     }
 
     void GetTypeString(DeltaCompressType type) {
@@ -463,22 +484,49 @@ public:
     }
 
     void Print() {
-      printf("\n----------    garbage collection complete!    ----------\n");
-      printf("gc process %zu records\n", gc_processed_records);
-      printf("Use %s to delta compress %zu similar records\n",
-             delta_compression_str.c_str(), delta_compressed_records_num);
-      printf("%zu bytes data are compressed to %zu byte\n",
-             delta_compressed_records_original_size,
-             delta_compressed_records_delta_size);
-      printf("compression ratio is %.2f\n",
+      printf("\n#######  garbage collection complete  #######\n");
+      printf("%zu records have been garbage collected\n", gc_processed_records);
+      printf("%zu similar records have been compressed by %s\n",
+             delta_compressed_records_num, delta_compression_str.c_str());
+      HumanReadable original_size(delta_compressed_records_original_size),
+          delta_size(delta_compressed_records_delta_size);
+      cout << original_size << " are compressed to " << delta_size << '\n';
+      printf("%.2f is the compression ratio\n",
              (double)delta_compressed_records_original_size /
                  delta_compressed_records_delta_size);
+      printf("%.2fs is the delta compress time\n",
+             TimespecToSeconds(gc_delta_compressed_time));
+      printf("%zu records compressed fail\n",
+             gc_delta_compressed_failed_number);
+      printf("#############################################\n\n");
+      fflush(stdout);
     }
   };
 
+  // bool IsFinishGC(const Statistics &statitics) {
+  //   double gc_ratio = (double)statitics.gc_processed_records /
+  //   total_records_; double avalible_compressed_ratio =
+  //       (double)feature_index_table.CountAllSimilarRecords() /
+  //       total_records_;
+  //   printf("GC complete %.2f%%, there are %.2f%% records can be delta "
+  //          "compressed\n",
+  //          gc_ratio, avalible_compressed_ratio);
+  //   if (avalible_compressed_ratio < 0.1 || gc_ratio > 0.9)
+  //     return true;
+  //   else
+  //     return false;
+  // }
+
+  bool IsFinishGC(uint64_t gc_processed_records) {
+    double gc_ratio = (double)gc_processed_records / total_records_;
+    printf("GC complete %.2f%%\n", gc_ratio * 100);
+    fflush(stdout);
+    return gc_ratio > 0.9;
+  }
+
   // TODO unifiy this and TitanDBImpl::TEST_StartGC
   void RunGC() {
-    printf("Start garbage collection!\n");
+    cout << "Start garbage collection!" << endl;
     MutexLock l(mutex_);
     Status s;
     auto *cfh = base_db_->DefaultColumnFamily();
@@ -529,7 +577,8 @@ public:
       tdb_->PurgeObsoleteFiles();
       mutex_->Lock();
     } while (blob_gc != nullptr && blob_gc->trigger_next() &&
-             statistics.gc_processed_records < total_records_);
+             IsFinishGC(statistics.gc_processed_records));
+    // } while (blob_gc != nullptr && blob_gc->trigger_next());
     statistics.GetTypeString(options_.blob_file_delta_compression);
     statistics.Print();
   }
@@ -539,8 +588,8 @@ public:
     ASSERT_OK(s);
   }
 
-  void GetSimilarRecords() override{
-    max_similar_records_ = feature_index_table.GetMaxNumberOfSiimlarRecords();
+  void GetSimilarRecords() override {
+    max_similar_records_ = feature_index_table.CountAllSimilarRecords();
   }
 
   void TestWikipedia() {
@@ -578,14 +627,14 @@ class ResemblenceDetectionTest
 public:
   ResemblenceDetectionTest()
       : DataReader(100),
-        table(get<0>(GetParam()), get<1>(GetParam()), get<2>(GetParam())){};
+        table_(get<0>(GetParam()), get<1>(GetParam()), get<2>(GetParam())){};
 
   void ExecutePut(const string &key, const string &value) override {
-    table.Put(key, value);
+    table_.Put(key, value);
   }
 
-  void GetSimilarRecords() override{
-    max_similar_records_ = table.GetMaxNumberOfSiimlarRecords();
+  void GetSimilarRecords() override {
+    max_similar_records_ = table_.CountAllSimilarRecords();
   }
 
   void TestWikipedia() { PutWikipediaData(); }
@@ -597,15 +646,15 @@ public:
   void TestStackOverFlowComment() { PutStackOverFlowCommentData(); }
 
 private:
-  FeatureIndexTable table;
+  FeatureIndexTable table_;
 };
 
 // TEST_P(ResemblenceDetectionTest, Wikipedia) { TestWikipedia(); }
 // TEST_P(ResemblenceDetectionTest, EnronMail) { TestEnronMail(); }
 // TEST_P(ResemblenceDetectionTest, StackOverFlow) { TestStackOverFlow(); }
-TEST_P(ResemblenceDetectionTest, StackOverFlowComment) {
-  TestStackOverFlowComment();
-}
+// TEST_P(ResemblenceDetectionTest, StackOverFlowComment) {
+//   TestStackOverFlowComment();
+// }
 
 TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
 TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
@@ -616,16 +665,18 @@ TEST_P(DeltaCompressionTest, StackOverFlowComment) {
 
 typedef tuple<feature_t, size_t, size_t> TableParameters;
 
-INSTANTIATE_TEST_CASE_P(
-    ResemblenceDetectionTestParameterized, ResemblenceDetectionTest,
-    ::testing::Values(TableParameters(k1_128RatioMask, 12, 12),
-                      TableParameters(k1_4RatioMask, 12, 12)));
+// INSTANTIATE_TEST_CASE_P(
+//     ResemblenceDetectionTestParameterized, ResemblenceDetectionTest,
+//     ::testing::Values(TableParameters(k1_128RatioMask, 12, 3),
+//                       TableParameters(k1_4RatioMask, 12, 3)
+//                       TableParameters(k1_4RatioMask, 12, 12)
+//                       ));
+
+INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+                        ::testing::Values(kGDelta, kXDelta, kEDelta));
 
 // INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
 // DeltaCompressionTest,
-//                         ::testing::Values(kGDelta, kXDelta, kEDelta));
-
-// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
 //                         ::testing::Values(kGDelta));
 
 } // namespace titandb

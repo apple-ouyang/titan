@@ -95,6 +95,8 @@ private:
     uint64_t gc_delta_compressed_record = 0;
     uint64_t gc_before_delta_compressed_size = 0;
     uint64_t gc_after_delta_compressed_size = 0;
+    timespec gc_delta_compressed_time{};
+    uint64_t gc_delta_compressed_failed_number = 0;
   } metrics_;
 
   uint64_t prev_bytes_read_ = 0;
