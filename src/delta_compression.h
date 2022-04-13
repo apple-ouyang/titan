@@ -54,7 +54,6 @@ const feature_t k1_4RatioMask = 0x0000000100000001;
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
 
-
 class FeatureGenerator {
 public:
   static const feature_t kDefaultSampleRatioMask = 0x0000400303410000;
@@ -87,7 +86,10 @@ private:
    * @description: Divide the features into kSuperFeatureNumber groups. Use
    * xxhash on each groups of feature to generate hash value as super feature.
    */
+  SuperFeatures MakeSuperFeatures();
   SuperFeatures GroupFeaturesAsSuperFeatures();
+  SuperFeatures CopyFeaturesAsSuperFeatures();
+  void CleanFeatures();
 
   vector<feature_t> features_;
   vector<feature_t> random_transform_args_a_;
@@ -118,10 +120,9 @@ public:
 
   // Use key to find all similar records by searching the key-feature table.
   // After that, remove key from the key-feature table
-  uint32_t GetSimilarRecordsKeys(const Slice &key,
-                                 vector<string> &similar_keys);
+  void GetSimilarRecordsKeys(const Slice &key, vector<string> &similar_keys);
 
-  size_t GetMaxNumberOfSiimlarRecords();
+  size_t CountAllSimilarRecords();
 
 private:
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;

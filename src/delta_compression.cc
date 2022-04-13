@@ -14,9 +14,13 @@
 #include "util/coding.h"
 #include "util/xxhash.h"
 #include "xdelta3.h"
+#include <bits/types/struct_timespec.h>
 #include <cstdint>
+#include <ctime>
 #include <iostream>
 #include <random>
+#include <sys/select.h>
+#include <unordered_set>
 
 namespace rocksdb {
 namespace titandb {
@@ -60,7 +64,7 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
   super_features = feature_generator_.GenerateSuperFeatures(value);
   key_feature_table_[k] = super_features;
   for (const auto &sf : super_features) {
-    feature_key_table_[sf].emplace(k);
+    feature_key_table_[sf].insert(k);
   }
 }
 
@@ -83,40 +87,45 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
   }
 }
 
-size_t FeatureIndexTable::GetMaxNumberOfSiimlarRecords() {
+size_t FeatureIndexTable::CountAllSimilarRecords() {
   size_t num = 0;
+  unordered_set<string> similar_keys;
   for (auto it : feature_key_table_) {
     auto keys = it.second;
+
+    // If there are more than one records have the same feature,
+    // thoese keys are considered similar
     if (keys.size() > 1) {
-      num += keys.size() - 1;
+      for (const string &key : keys)
+        similar_keys.emplace(move(key));
     }
   }
-  return num;
+  return similar_keys.size();
 }
 
-uint32_t
-FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
-                                         vector<string> &similar_keys) {
-  similar_keys.clear();
+void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
+                                              vector<string> &similar_keys) {
   SuperFeatures super_features;
   const string k = key.ToString();
   if (!GetSuperFeatures(k, &super_features)) {
-    return 0;
+    return;
   }
 
   for (const auto &sf : super_features) {
-    for (const string &similar_key : feature_key_table_[sf]) {
+    for (string similar_key : feature_key_table_[sf]) {
       if (similar_key != k) {
         similar_keys.emplace_back(move(similar_key));
       }
     }
   }
 
+  for (const string &similar_key : similar_keys) {
+    Delete(similar_key);
+  }
   ExecuteDelete(k, super_features);
-  return similar_keys.size();
 }
 
-FeatureGenerator::FeatureGenerator(uint64_t sample_mask, size_t feature_number,
+FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
                                    size_t super_feature_number)
     : kSampleRatioMask(sample_mask), kFeatureNumber(feature_number),
       kSuperFeatureNumber(super_feature_number) {
@@ -124,7 +133,7 @@ FeatureGenerator::FeatureGenerator(uint64_t sample_mask, size_t feature_number,
 
   std::random_device rd;
   std::default_random_engine e(rd());
-  std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
+  std::uniform_int_distribution<feature_t> dis(0, UINT64_MAX);
 
   features_.resize(kFeatureNumber);
   random_transform_args_a_.resize(kFeatureNumber);
@@ -138,12 +147,12 @@ FeatureGenerator::FeatureGenerator(uint64_t sample_mask, size_t feature_number,
 }
 
 void FeatureGenerator::OdessResemblanceDetect(const Slice &value) {
-  uint64_t hash = 0;
+  feature_t hash = 0;
   for (size_t i = 0; i < value.size(); ++i) {
     hash = (hash << 1) + gear_matrix[static_cast<uint8_t>(value[i])];
     if (!(hash & kSampleRatioMask)) {
       for (size_t j = 0; j < kFeatureNumber; ++j) {
-        uint64_t transform_res =
+        feature_t transform_res =
             hash * random_transform_args_a_[j] + random_transform_args_b_[j];
         if (transform_res > features_[j])
           features_[j] = transform_res;
@@ -152,19 +161,39 @@ void FeatureGenerator::OdessResemblanceDetect(const Slice &value) {
   }
 }
 
+SuperFeatures FeatureGenerator::MakeSuperFeatures() {
+  if (kSuperFeatureNumber == kFeatureNumber)
+    return CopyFeaturesAsSuperFeatures();
+  else
+    return GroupFeaturesAsSuperFeatures();
+}
+
+SuperFeatures FeatureGenerator::CopyFeaturesAsSuperFeatures() {
+  SuperFeatures super_features(features_.begin(), features_.end());
+  return super_features;
+}
+
+// Divede features into groups, then use the group hash as the super feature
 SuperFeatures FeatureGenerator::GroupFeaturesAsSuperFeatures() {
   SuperFeatures super_features(kSuperFeatureNumber);
   for (size_t i = 0; i < kSuperFeatureNumber; ++i) {
     size_t group_len = kFeatureNumber / kSuperFeatureNumber;
-    super_features[i] = XXH64(&this->features_[i * group_len],
+    super_features[i] = XXH64(&features_[i * group_len],
                               sizeof(feature_t) * group_len, 0x7fcaf1);
   }
   return super_features;
 }
 
+void FeatureGenerator::CleanFeatures() {
+  for (size_t i = 0; i < kFeatureNumber; ++i) {
+    features_[i] = 0;
+  }
+}
+
 SuperFeatures FeatureGenerator::GenerateSuperFeatures(const Slice &value) {
+  CleanFeatures();
   OdessResemblanceDetect(value);
-  return GroupFeaturesAsSuperFeatures();
+  return MakeSuperFeatures();
 }
 
 bool XDelta_Compress(const char *input, size_t input_len, const char *base,
@@ -265,7 +294,7 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
   size_t outlen = 0;
   uint32_t delta_size;
   outlen = gencode((uint8_t *)input, input_len, (uint8_t *)base,
-                   (uint32_t)base_len, (uint8_t *)buff, &delta_size);
+                   (uint32_t)base_len, (uint8_t **)&buff, &delta_size);
   *output = string(buff, buff + outlen);
   delete[] buff;
   return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
@@ -281,7 +310,7 @@ bool GDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
                        size_t base_len, char *output, uint32_t *outlen) {
 #ifdef GDELTA_GDELTA_H // TODO(haitao)
   return gdecode((uint8_t *)delta, delta_len, (uint8_t *)base,
-                 (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
+                 (uint32_t)base_len, (uint8_t **)&output, outlen) == 0;
 #else
   (void)input;
   (void)length;
@@ -338,9 +367,6 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
   }
 
   // TODO(haitao) 写个log
-  printf("Delta compress records fail! \nbase=%s\n value=%s\n\n",
-         base.ToString().c_str(), input.ToString().c_str());
-
   return false;
 }
 
