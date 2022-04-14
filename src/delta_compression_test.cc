@@ -1,7 +1,7 @@
 /*
  * @Author: Wang Haitao
  * @Date: 2022-03-30 15:11:47
- * @LastEditTime: 2022-04-13 13:29:43
+ * @LastEditTime: 2022-04-14 15:39:58
  * @LastEditors: Wang Haitao
  * @FilePath: /titan/src/delta_compression_test.cc
  * @Description: Github:https://github.com/apple-ouyang
@@ -517,11 +517,11 @@ public:
   //     return false;
   // }
 
-  bool IsFinishGC(uint64_t gc_processed_records) {
+  bool IsKeepGC(uint64_t gc_processed_records) {
     double gc_ratio = (double)gc_processed_records / total_records_;
     printf("GC complete %.2f%%\n", gc_ratio * 100);
     fflush(stdout);
-    return gc_ratio > 0.9;
+    return gc_ratio < 0.9;
   }
 
   // TODO unifiy this and TitanDBImpl::TEST_StartGC
@@ -577,7 +577,7 @@ public:
       tdb_->PurgeObsoleteFiles();
       mutex_->Lock();
     } while (blob_gc != nullptr && blob_gc->trigger_next() &&
-             IsFinishGC(statistics.gc_processed_records));
+             IsKeepGC(statistics.gc_processed_records));
     // } while (blob_gc != nullptr && blob_gc->trigger_next());
     statistics.GetTypeString(options_.blob_file_delta_compression);
     statistics.Print();
@@ -657,11 +657,11 @@ private:
 // }
 
 TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
-TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
-TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
-TEST_P(DeltaCompressionTest, StackOverFlowComment) {
-  TestStackOverFlowComment();
-}
+// TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
+// TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
+// TEST_P(DeltaCompressionTest, StackOverFlowComment) {
+//   TestStackOverFlowComment();
+// }
 
 typedef tuple<feature_t, size_t, size_t> TableParameters;
 
