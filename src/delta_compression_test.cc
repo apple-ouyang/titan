@@ -1,7 +1,7 @@
 /*
  * @Author: Wang Haitao
  * @Date: 2022-03-30 15:11:47
- * @LastEditTime: 2022-04-14 15:39:58
+ * @LastEditTime: 2022-04-17 23:49:18
  * @LastEditors: Wang Haitao
  * @FilePath: /titan/src/delta_compression_test.cc
  * @Description: Github:https://github.com/apple-ouyang
@@ -656,12 +656,12 @@ private:
 //   TestStackOverFlowComment();
 // }
 
-TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
-// TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
-// TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
-// TEST_P(DeltaCompressionTest, StackOverFlowComment) {
-//   TestStackOverFlowComment();
-// }
+// TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
+TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
+TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
+TEST_P(DeltaCompressionTest, StackOverFlowComment) {
+  TestStackOverFlowComment();
+}
 
 typedef tuple<feature_t, size_t, size_t> TableParameters;
 

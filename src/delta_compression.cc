@@ -294,7 +294,7 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
   size_t outlen = 0;
   uint32_t delta_size;
   outlen = gencode((uint8_t *)input, input_len, (uint8_t *)base,
-                   (uint32_t)base_len, (uint8_t **)&buff, &delta_size);
+                   (uint32_t)base_len, (uint8_t *)buff, &delta_size);
   *output = string(buff, buff + outlen);
   delete[] buff;
   return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
@@ -310,7 +310,7 @@ bool GDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
                        size_t base_len, char *output, uint32_t *outlen) {
 #ifdef GDELTA_GDELTA_H // TODO(haitao)
   return gdecode((uint8_t *)delta, delta_len, (uint8_t *)base,
-                 (uint32_t)base_len, (uint8_t **)&output, outlen) == 0;
+                 (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
 #else
   (void)input;
   (void)length;
