@@ -77,7 +77,15 @@ class BlobFileBuilder {
   // 2. Caller should set `ctx.new_blob_index.file_number` before pass it in,
   //    the file builder will only change the `blob_handle` of it
   void Add(const BlobRecord& record, std::unique_ptr<BlobRecordContext> ctx,
-           OutContexts* out_ctx, const DeltaInfo *delta_info = nullptr);
+           OutContexts* out_ctx);
+
+  // Tries to add the record to the file
+  // Notice:
+  // 1. The `out_ctx` might be empty when builder is in `kBuffered` state.
+  // 2. Caller should set `ctx.new_blob_index.file_number` before pass it in,
+  //    the file builder will only change the `blob_handle` of it
+  void Add(const DeltaRecords& records, std::unique_ptr<BlobRecordContext> ctx,
+          OutContexts* out_ctx);
 
   // AddSmall is used to prevent the disorder issue, small KV pairs and blob
   // index block may be passed in here
@@ -123,7 +131,10 @@ class BlobFileBuilder {
   void WriteCompressionDictBlock(MetaIndexBuilder* meta_index_builder);
   void FlushSampleRecords(OutContexts* out_ctx);
   void WriteEncoderData(BlobHandle* handle);
-
+  void UpdateKeyRange(const std::string &key);
+  template <typename BlobType>
+  void Add(const BlobType &record, std::unique_ptr<BlobRecordContext> ctx,
+           OutContexts *out_ctx);
   TitanCFOptions cf_options_;
   WritableFileWriter* file_;
   const uint32_t blob_file_version_;

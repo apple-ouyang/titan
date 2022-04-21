@@ -190,6 +190,7 @@ public:
   template <typename BlobType> void EncodeRecord(const BlobType &record);
   void EncodeBlobRecord(const BlobRecord &record);
   void EncodeDeltaRecords(const DeltaRecords &records);
+  void CompressAndEncodeHeader(const Slice &record);
   
   void SetCompressionDict(const CompressionDict* compression_dict) {
     compression_dict_ = compression_dict;
@@ -200,7 +201,6 @@ public:
 
   Slice GetHeader() const { return Slice(header_, sizeof(header_)); }
   Slice GetRecord() const { return record_; }
-
   size_t GetEncodedSize() const { return sizeof(header_) + record_.size(); }
 
 private:
@@ -215,7 +215,6 @@ private:
   DeltaCompressType delta_compression_;
   bool is_delta_compressed_;
 
-  void CompressAndEncodeHeader(const Slice &record);
   void EncodeHeader(CompressionType compression);
 };
 

@@ -1,4 +1,5 @@
 #include "blob_file_builder.h"
+#include "blob_format.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -14,7 +15,8 @@ BlobFileBuilder::BlobFileBuilder(const TitanDBOptions& db_options,
       file_(file),
       blob_file_version_(blob_file_version),
       encoder_(cf_options.blob_file_compression,
-               cf_options.blob_file_compression_options) {
+               cf_options.blob_file_compression_options,
+               cf_options.blob_file_delta_compression) {
   status_ = BlobFileHeader::ValidateVersion(blob_file_version_);
   if (!status_.ok()) {
     return;
@@ -44,12 +46,12 @@ void BlobFileBuilder::WriteHeader() {
   status_ = file_->Append(buffer);
 }
 
-void BlobFileBuilder::Add(const BlobRecord& record,
+template <typename BlobType>
+void BlobFileBuilder::Add(const BlobType &record,
                           std::unique_ptr<BlobRecordContext> ctx,
-                          OutContexts* out_ctx, const DeltaInfo *delta_info) {
-  if (!ok()) return;
-  std::string key = record.key.ToString();
-  //TODO(haitao) 考虑kBuffered怎么处理这个delta_info
+                          OutContexts *out_ctx) {
+  if (!ok())
+    return;
   if (builder_state_ == BuilderState::kBuffered) {
     std::string record_str;
     // Encode to take ownership of underlying string.
@@ -61,32 +63,52 @@ void BlobFileBuilder::Add(const BlobRecord& record,
         sample_str_len_ >=
             cf_options_.blob_file_compression_options.zstd_max_train_bytes) {
       EnterUnbuffered(out_ctx);
+    } else {
+      encoder_.EncodeRecord(record);
+      WriteEncoderData(&ctx->new_blob_index.blob_handle);
+      out_ctx->emplace_back(std::move(ctx));
     }
-  } else {
-    encoder_.EncodeRecord(record, delta_info);
-    WriteEncoderData(&ctx->new_blob_index.blob_handle);
-    out_ctx->emplace_back(std::move(ctx));
   }
+}
 
+void BlobFileBuilder::Add(const BlobRecord &record,
+                          std::unique_ptr<BlobRecordContext> ctx,
+                          OutContexts *out_ctx){
+  Add<BlobRecord>(record, move(ctx), out_ctx);
+  std::string key = record.key.ToString();
+  UpdateKeyRange(key);                          
+}
+
+void BlobFileBuilder::Add(const DeltaRecords &records,
+                          std::unique_ptr<BlobRecordContext> ctx,
+                          OutContexts *out_ctx) {
+  Add<DeltaRecords>(records, move(ctx), out_ctx);
+  for (const Slice &key : records.keys) {
+    UpdateKeyRange(key.ToString());
+  }
+}
+
+void BlobFileBuilder::UpdateKeyRange(const std::string &key) {
   // The keys added into blob files are in order.
   // We do key range checks for both state
-  // TODO(Haitao) 有没有好办法避免每次都比较大小，每次比较怕是会很慢
+  // TODO(haitao) 有没有好办法避免每次都比较大小，每次比较怕是会很慢
   // TODO(haitao) 测试每次都比较需要消耗多少时间
   if (smallest_key_.empty() ||
-      cf_options_.comparator->Compare(record.key, Slice(smallest_key_)) < 0) {
-    smallest_key_.assign(record.key.data(), record.key.size());
-  } else if (largest_key_.empty() || cf_options_.comparator->Compare(
-                                         record.key, Slice(largest_key_)) > 0) {
-    largest_key_.assign(record.key.data(), record.key.size());
+      cf_options_.comparator->Compare(key, Slice(smallest_key_)) < 0) {
+    smallest_key_.assign(key.data(), key.size());
+  } else if (largest_key_.empty() ||
+             cf_options_.comparator->Compare(key, Slice(largest_key_)) > 0) {
+    largest_key_.assign(key.data(), key.size());
   }
 
   // if (smallest_key_.empty()) {
   //   smallest_key_.assign(record.key.data(), record.key.size());
   // }
-  // assert(cf_options_.comparator->Compare(record.key, Slice(smallest_key_)) >=
+  // assert(cf_options_.comparator->Compare(record.key, Slice(smallest_key_))
+  // >=
   //        0);
-  // assert(cf_options_.comparator->Compare(record.key, Slice(largest_key_)) >= 0);
-  // largest_key_.assign(record.key.data(), record.key.size());
+  // assert(cf_options_.comparator->Compare(record.key, Slice(largest_key_))
+  // >= 0); largest_key_.assign(record.key.data(), record.key.size());
 }
 
 void BlobFileBuilder::AddSmall(std::unique_ptr<BlobRecordContext> ctx) {
@@ -131,7 +153,7 @@ void BlobFileBuilder::FlushSampleRecords(OutContexts* out_ctx) {
       out_ctx->emplace_back(std::move(cached_contexts_[ctx_idx]));
     }
     const std::unique_ptr<BlobRecordContext>& ctx = cached_contexts_[ctx_idx];
-    encoder_.EncodeSlice(record_str);
+    encoder_.CompressAndEncodeHeader(record_str);
     WriteEncoderData(&ctx->new_blob_index.blob_handle);
     out_ctx->emplace_back(std::move(cached_contexts_[ctx_idx]));
   }
