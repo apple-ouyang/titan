@@ -1,13 +1,3 @@
-/*
- * @Author: Wang Haitao
- * @Date: 2022-03-30 15:11:47
- * @LastEditTime: 2022-04-14 15:39:58
- * @LastEditors: Wang Haitao
- * @FilePath: /titan/src/delta_compression_test.cc
- * @Description: Github:https://github.com/apple-ouyang
- *  Gitee:https://gitee.com/apple-ouyang
- */
-
 #include "blob_gc_job.h"
 #include "blob_gc_picker.h"
 #include "db_impl.h"

@@ -1,12 +1,3 @@
-/**
- * @Author: Wang Haitao
- * @Date: 2021-12-24 10:10:27
- * @LastEditTime: 2021-12-24 11:35:18
- * @LastEditors: Wang Haitao
- * @FilePath: /titan/src/delta_compression.h
- * @Description: https://github.com/apple-ouyang
- */
-
 #pragma once
 
 #include "rocksdb/slice.h"

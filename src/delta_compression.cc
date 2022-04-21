@@ -1,12 +1,3 @@
-/**
- * @Author: Wang Haitao
- * @Date: 2021-12-24 11:04:22
- * @LastEditTime: 2021-12-24 11:05:41
- * @LastEditors: Wang Haitao
- * @FilePath: /titan/src/delta_compression.cpp
- * @Description: https://github.com/apple-ouyang
- */
-
 #include "delta_compression.h"
 #include "edelta.h"
 #include "gdelta.h"
