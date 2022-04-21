@@ -1,6 +1,10 @@
 #include "blob_format.h"
 
+#include "rocksdb/options.h"
+#include "rocksdb/status.h"
 #include "test_util/sync_point.h"
+#include "titan/options.h"
+#include "util/coding.h"
 #include "util/crc32c.h"
 
 namespace rocksdb {
@@ -34,29 +38,65 @@ bool operator==(const BlobRecord& lhs, const BlobRecord& rhs) {
   return lhs.key == rhs.key && lhs.value == rhs.value;
 }
 
-void BlobEncoder::EncodeRecord(const BlobRecord& record, const DeltaInfo* delta_info) {
-  record_buffer_.clear();
-  record.EncodeTo(&record_buffer_);
-  EncodeSlice(record_buffer_, delta_info);
+void DeltaRecords::EncodeTo(std::string *dst) const {
+  for (size_t i = 0; i < keys.size(); ++i) {
+    PutLengthPrefixedSlice(dst, keys[i]);
+    PutLengthPrefixedSlice(dst, values[i]);
+  }
 }
 
-void BlobEncoder::EncodeSlice(const Slice& record, const DeltaInfo* delta_info) {
+Status DeltaRecords::DecodeFrom(Slice *src) {
+  while (src->size() > 0) {
+    Slice key, value;
+    if (!GetLengthPrefixedSlice(src, &key) ||
+        !GetLengthPrefixedSlice(src, &value)) {
+      return Status::Corruption("DeltaRecords");
+    }
+    keys.emplace_back(std::move(key));
+    values.emplace_back(std::move(value));
+  }
+  return Status::OK();
+}
+
+size_t DeltaRecords::size() const {
+  size_t size = 0;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    size += keys[i].size() + values[i].size();
+  }
+  return size;
+}
+
+template <typename BlobType>
+void BlobEncoder::EncodeRecord(const BlobType &record){
+  record_buffer_.clear();
+  record.EncodeTo(&record_buffer_);
+  CompressAndEncodeHeader(record_buffer_);
+}
+
+void BlobEncoder::EncodeBlobRecord(const BlobRecord &record){
+  is_delta_compressed_ = false;
+  EncodeRecord<BlobRecord>(record);
+}
+
+void BlobEncoder::EncodeDeltaRecords(const DeltaRecords &records){
+  is_delta_compressed_ = true;
+  EncodeRecord<DeltaRecords>(records);
+}
+
+void BlobEncoder::CompressAndEncodeHeader(const Slice& record) {
   compressed_buffer_.clear();
   CompressionType compression;
   record_ =
       Compress(*compression_info_, record, &compressed_buffer_, &compression);
 
-  EncodeHeader(compression, delta_info);
+  EncodeHeader(compression);
 }
 
-void BlobEncoder::EncodeHeader(CompressionType compression, const DeltaInfo* delta_info){
+void BlobEncoder::EncodeHeader(CompressionType compression){
   assert(record_.size() < std::numeric_limits<uint32_t>::max());
   EncodeFixed32(header_ + 4, static_cast<uint32_t>(record_.size()));
   header_[8] = compression;
-
-  DeltaInfo info = (delta_info == nullptr)? DeltaInfo() : *delta_info;
-  header_[9] = info.flag.data;
-  EncodeFixed16(header_ + 10, info.reference);
+  header_[9] = is_delta_compressed_ ? delta_compression_ : kNoDeltaCompression;
 
   uint32_t crc = crc32c::Value(header_ + 4, sizeof(header_) - 4);
   crc = crc32c::Extend(crc, record_.data(), record_.size());
@@ -69,46 +109,51 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
   }
   header_crc_ = crc32c::Value(src->data(), kRecordHeaderSize - 4);
 
-  unsigned char compression;
+  unsigned char compression, delta_compression;
   if (!GetFixed32(src, &record_size_) || !GetChar(src, &compression) ||
-      !GetChar(src, &delta_info_.flag.data) ||
-      !GetFixed16(src, &delta_info_.reference)) {
+      !GetChar(src, &delta_compression)) {
     return Status::Corruption("BlobHeader");
   }
 
   compression_ = static_cast<CompressionType>(compression);
-
-  //TODO(haitao) 可不可以把header的reference搞成可选字段
-  // 如果这样的话，需要修改读取时的size
-  // if(type_ == kBaseRecord){
-  //   if(!GetFixed32(src, &reference_)){
-  //     return Status::Corruption("BlobHeader", "reference");
-  //   }
-  // }
-
+  delta_compression_ = static_cast<DeltaCompressType>(delta_compression);
   return Status::OK();
 }
 
-Status BlobDecoder::DecodeRecord(Slice* src, BlobRecord* record,
-                                 OwnedSlice* buffer) {
+Status BlobDecoder::CheckRecordCrc(const Slice &src){
+  uint32_t crc = crc32c::Extend(header_crc_, src.data(), src.size());
+  if (crc != crc_) {
+    return Status::Corruption("BlobDecoder", "checksum mismatch");
+  }
+  return Status::OK();
+}
+
+Status BlobDecoder::UncompressRecordIntoBuffer(const Slice &src, OwnedSlice* buffer){
+  if(compression_ == kNoCompression)
+    return Status::OK();
+
+  UncompressionContext ctx(compression_);
+  UncompressionInfo info(ctx, *uncompression_dict_, compression_);
+  Status s = Uncompress(info, src, buffer);
+  return s;
+}
+
+template <typename RecordType>
+Status BlobDecoder::DecodeRecord(Slice *src, RecordType *record,
+                                 OwnedSlice *buffer) {
   TEST_SYNC_POINT_CALLBACK("BlobDecoder::DecodeRecord", &crc_);
 
   Slice input(src->data(), record_size_);
   src->remove_prefix(record_size_);
-  uint32_t crc = crc32c::Extend(header_crc_, input.data(), input.size());
-  if (crc != crc_) {
-    return Status::Corruption("BlobRecord", "checksum mismatch");
-  }
 
-  if (compression_ == kNoCompression) {
-    return DecodeInto(input, record);
-  }
-  UncompressionContext ctx(compression_);
-  UncompressionInfo info(ctx, *uncompression_dict_, compression_);
-  Status s = Uncompress(info, input, buffer);
-  if (!s.ok()) {
+  Status s = CheckRecordCrc(input);
+  if(!s.ok())
     return s;
-  }
+
+  s = UncompressRecordIntoBuffer(input, buffer);
+  if(!s.ok())
+    return s;
+
   return DecodeInto(*buffer, record);
 }
 
@@ -135,8 +180,7 @@ void BlobIndex::EncodeTo(std::string* dst) const {
 }
 
 inline bool BlobIndex::GoodType() {
-  return type == kBlobRecord || type == kDeltaRecord ||
-         type == kBaseRecord;
+  return type == kBlobRecord || type == kDeltaRecords;
 }
 
 Status BlobIndex::DecodeFrom(Slice* src) {
@@ -168,16 +212,22 @@ bool BlobIndex::operator==(const BlobIndex& rhs) const {
   return (file_number == rhs.file_number && blob_handle == rhs.blob_handle);
 }
 
-BlobDeltaIndex::BlobDeltaIndex(BlobIndex index) {
-  type = BlobType::kDeltaRecord;
+DeltaRecordsIndex::DeltaRecordsIndex(BlobIndex index) {
+  type = BlobType::kDeltaRecords;
   file_number = index.file_number;
   blob_handle = index.blob_handle;
 }
 
-void BlobDeltaIndex::EncodeTo(std::string *dst) const {
-  BlobIndex::EncodeTo(dst);
-  base_index.EncodeTo(dst);
+Status DeltaRecordsIndex::DecodeFromBehindBase(Slice *src) {
+  if (!GetVarint32(src, &record_index))
+    return Status::Corruption("BlobDeltaRecordsIndex");
+  return Status::OK();
 }
+
+void DeltaRecordsIndex::EncodeTo(std::string *dst) const {
+    BlobIndex::EncodeTo(dst);
+    PutVarint32(dst, record_index);
+  }
 
 void MergeBlobIndex::EncodeTo(std::string* dst) const {
   BlobIndex::EncodeTo(dst);
