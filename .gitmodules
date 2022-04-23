@@ -1,9 +1,7 @@
-[submodule "xdelta"]
-	path = third-party/xdelta
-	url = git@github.com:apple-ouyang/xdelta.git
-[submodule "Gdelta"]
-	path = third-party/gdelta
-	url = git@github.com:apple-ouyang/gdelta.git
 [submodule "third-party/edelta"]
 	path = third-party/edelta
-	url = git@github.com:apple-ouyang/edelta.git
+	url = https://github.com/apple-ouyang/edelta.git
+[submodule "third-party/gdelta"]
+	url = https://github.com/apple-ouyang/gdelta.git
+[submodule "third-party/xdelta"]
+	url = https://github.com/apple-ouyang/xdelta.git
