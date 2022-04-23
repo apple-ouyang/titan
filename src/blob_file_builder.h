@@ -54,15 +54,35 @@ class BlobFileBuilder {
     kUnbuffered,
   };
 
+  struct BlobRecordContext;
+  typedef autovector<std::unique_ptr<BlobRecordContext>> OutContexts;
   struct BlobRecordContext {
     std::string key;  // original internal key
     BlobIndex original_blob_index;
     BlobIndex new_blob_index;
     bool has_value = false;
     std::string value;
-    BlobIndex base_index; // only kDeltaRecord has this field
+
+    // only kDeltaRecords need thoses 3 fields
+    bool is_delta_compressed = false;      
+    std::vector<BlobIndex> deltas_original_indexs;
+    uint32_t delta_index; 
+
+    void WriteDeltaIndexsContexts(OutContexts *contexts) {
+      assert(is_delta_compressed);
+      for (size_t i = 0; i < deltas_original_indexs.size(); ++i) {
+        std::unique_ptr<BlobFileBuilder::BlobRecordContext> ctx(
+            new BlobFileBuilder::BlobRecordContext);
+        ctx->key = this->key;
+        ctx->new_blob_index = this->new_blob_index;
+        ctx->original_blob_index = deltas_original_indexs[i];
+        ctx->delta_index = static_cast<uint32_t>(i);
+        contexts->emplace_back(move(ctx));
+      }
+      deltas_original_indexs.clear();
+    }
   };
-  typedef autovector<std::unique_ptr<BlobRecordContext>> OutContexts;
+
 
   // Constructs a builder that will store the contents of the file it
   // is building in "*file". Does not close the file. It is up to the

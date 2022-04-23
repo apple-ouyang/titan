@@ -53,6 +53,9 @@ class BlobIndexMergeOperator : public MergeOperator {
 
     MergeBlobIndex index;
     BlobIndex merge_index;
+    // TODO(haitao) 两个地方没看懂：
+    // 1. 什么函数会调用fullmergev2？oprand_list 哪里来的？
+    // 2. 下面这个 for 啥意思？干了啥？
     for (auto operand : merge_in.operand_list) {
       s = index.DecodeFrom(&operand);
       if (!s.ok()) {

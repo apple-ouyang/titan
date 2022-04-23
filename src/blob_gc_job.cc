@@ -118,7 +118,7 @@ Status BlobGCJob::DeltaCompressRecords(const Slice &base,
     }
 
     // TODO(haitao) 写个log
-    assert(index.type != BlobType::kDeltaRecord);
+    assert(index.type != BlobType::kDeltaRecords);
     struct timespec start, stop;
     clock_gettime(CLOCK_MONOTONIC, &start);
     if (!DeltaCompress(type, value, base, &delta)) {
@@ -136,97 +136,6 @@ Status BlobGCJob::DeltaCompressRecords(const Slice &base,
     deltas_keys.emplace_back(move(similar_keys[i]));
     deltas_values.emplace_back(move(delta));
     deltas_indexes.emplace_back(std::move(index));
-  }
-  return s;
-}
-
-Status BlobGCJob::IterateDeltasUnderBase(
-    std::unique_ptr<BlobFileMergeIterator> &gc_iter, const size_t kDeltasNumber,
-    vector<string> &keys, vector<string> &values, vector<BlobIndex> &indexes) {
-  // TOOD(haitao) 修改以下所有 assert 变为写 log
-  size_t good_delta_number = 0;
-  Status s;
-  for (size_t i = 0; i < kDeltasNumber; ++i) {
-    gc_iter->Next();
-    assert(gc_iter->Valid());
-
-    BlobIndexDeltaInfo index_info = gc_iter->GetBlobIndexDeltaInfo();
-    BlobIndex index = index_info.index;
-    BlobType type = index_info.info.flag.GetBlobType();
-
-    // count read bytes for blob record of gc candidate files
-    metrics_.gc_bytes_read += index.blob_handle.size;
-
-    assert(type == kDeltaRecord);
-
-    bool discardable = false;
-    s = DiscardEntry(gc_iter->key(), index, &discardable);
-    if (!s.ok()) {
-      return s;
-    }
-    if (discardable) {
-      metrics_.gc_num_keys_overwritten++;
-      metrics_.gc_bytes_overwritten += index.blob_handle.size;
-      continue;
-    }
-
-    BlobRecord delta_record;
-    delta_record.key = gc_iter->key();
-    delta_record.value = gc_iter->value();
-    // count written bytes for new blob record,
-    // blob index's size is counted in `RewriteValidKeyToLSM`
-    metrics_.gc_bytes_written += delta_record.size();
-
-    ++good_delta_number;
-    keys.emplace_back(delta_record.key.ToString());
-    values.emplace_back(delta_record.value.ToString());
-    indexes.emplace_back(std::move(index));
-  }
-  return s;
-}
-
-Status BlobGCJob::WriteDeltas(
-    const BlobIndex &new_base_index, const vector<string> &keys,
-    const vector<string> &values, vector<BlobIndex> &indexes,
-    uint64_t write_file_number,
-    const std::unique_ptr<BlobFileBuilder> &blob_file_builder) {
-  Status s;
-  
-  // All deltas in a column family are using only one type of delta
-  // compression method. So the infoes of thoses deltas are same
-  DeltaInfo delta_info;
-  delta_info.flag = DeltaFlag(
-      kDeltaRecord, blob_gc_->titan_cf_options().blob_file_delta_compression);
-
-  for (size_t i = 0; i < keys.size(); ++i) {
-    BlobRecord delta_record;
-    delta_record.key = Slice(keys[i]);
-    delta_record.value = Slice(values[i]);
-
-    // BlobRecordContext require key to be an internal key. We encode key
-    // to internal key in spite we only need the user key.
-    std::unique_ptr<BlobFileBuilder::BlobRecordContext> delta_ctx(
-        new BlobFileBuilder::BlobRecordContext);
-    InternalKey delta_ikey(delta_record.key, 1, kTypeValue);
-    // TODO(haitao) 为什么这里是kTypeValue？搞不清楚
-
-    delta_ctx->key = delta_ikey.Encode().ToString();
-    delta_ctx->original_blob_index = indexes[i];
-    delta_ctx->new_blob_index.file_number = write_file_number;
-    delta_ctx->new_blob_index.type = BlobType::kDeltaRecord;
-    delta_ctx->base_index = new_base_index;
-
-    BlobFileBuilder::OutContexts delta_contexts;
-    blob_file_builder->Add(delta_record, move(delta_ctx), &delta_contexts,
-                           &delta_info);
-
-    BatchWriteNewIndices(delta_contexts, &s);
-    if (!s.ok()) {
-      // FIXME(haitao) 一旦没有写进去，会导致 base 的 ref 多出来，会导致后面
-      // base 无法被清除
-      assert(false);
-      return s;
-    }
   }
   return s;
 }
@@ -297,6 +206,55 @@ Status BlobGCJob::Run() {
   return DoRunGC();
 }
 
+// Status DeltaCompressBlobRecord(const BlobRecord &record, DeltaCompressType type,
+//                              DeltaRecords &res) {
+//   vector<string> similar_keys;
+//   feature_index_table.GetSimilarRecordsKeys(record.key, similar_keys);
+//   if (similar_keys.size() > 0) {
+//     Status s = DeltaCompressRecords(record.value, similar_keys, deltas_keys,
+//                              deltas_values, delta_indexes);
+//     if (!s.ok())
+//       return s;
+//     delta_compressed_records.AddDeltaCompressedKeys(deltas_keys);
+//     metrics_.gc_num_processed_records += deltas_keys.size();
+//   }
+// }
+
+inline bool BlobGCJob::IsBlobFileHitLimit(
+    const std::unique_ptr<BlobFileHandle> &blob_file_handle) {
+  return blob_file_handle->GetFile()->GetFileSize() >=
+         blob_gc_->titan_cf_options().blob_file_target_size;
+}
+
+bool BlobGCJob::IsNeedNewBlobFile(const std::unique_ptr<BlobFileHandle> &blob_file_handle, const std::unique_ptr<BlobFileBuilder> &blob_file_builder){
+  if (blob_file_handle == nullptr || blob_file_builder == nullptr)
+    return true;
+  else if (IsBlobFileHitLimit(blob_file_handle))
+    return true;
+  return false;
+}
+
+Status
+BlobGCJob::CreateNewBlobFile(std::unique_ptr<BlobFileHandle> &blob_file_handle,
+                         std::unique_ptr<BlobFileBuilder> &blob_file_builder) {
+  if (blob_file_handle != nullptr && IsBlobFileHitLimit(blob_file_handle)) {
+    assert(blob_file_builder);
+    assert(blob_file_builder->status().ok());
+    blob_file_builders_.emplace_back(std::make_pair(
+        std::move(blob_file_handle), std::move(blob_file_builder)));
+  }
+  Status s =
+      blob_file_manager_->NewFile(&blob_file_handle, Env::IOPriority::IO_LOW);
+  if (!s.ok()) {
+    return s;
+  }
+  TITAN_LOG_INFO(db_options_.info_log, "Titan new GC output file %" PRIu64 ".",
+                 blob_file_handle->GetNumber());
+  blob_file_builder = std::unique_ptr<BlobFileBuilder>(new BlobFileBuilder(
+      db_options_, blob_gc_->titan_cf_options(), blob_file_handle->GetFile()));
+  return s;
+}
+
 Status BlobGCJob::DoRunGC() {
   Status s;
 
@@ -321,7 +279,7 @@ Status BlobGCJob::DoRunGC() {
   //  uint64_t total_entry_num = 0;
   //  uint64_t total_entry_size = 0;
 
-  uint64_t file_size = 0;
+  HaveDeltaCompressed have_delta_compressed;
 
   std::string last_key;
   bool last_key_valid = false;
@@ -333,154 +291,129 @@ Status BlobGCJob::DoRunGC() {
       break;
     }
     metrics_.gc_num_processed_records++;
-    BlobIndexDeltaInfo index_info = gc_iter->GetBlobIndexDeltaInfo();
-    BlobIndex blob_index = index_info.index;
-    BlobType type = index_info.info.flag.GetBlobType();
-    uint16_t base_ref = index_info.info.reference;
-    DeltaCompressType delta_compress_type =
-        blob_gc_->titan_cf_options().blob_file_delta_compression;
+    BlobIndex blob_index = gc_iter->GetBlobIndex();
+    bool is_delta_records = blob_index.type == kDeltaRecords;
+    BlobRecord blob_record;
+    DeltaRecords delta_records;
+    BlobRecord base_record;
+    if(is_delta_records){
+      delta_records = gc_iter->GetDeltaRecords();
+      base_record = delta_records;
+    }
+    else
+      blob_record = gc_iter->GetBlobRecord();
+    
     // count read bytes for blob record of gc candidate files
     metrics_.gc_bytes_read += blob_index.blob_handle.size;
 
     // TODO(haitao)
     // 这个优化真的有用吗？就为了哪些key相同的连续的键？怕是没多少把
-    if (!last_key.empty() && !gc_iter->key().compare(last_key)) {
+    if (!last_key.empty() && !blob_record.key.compare(last_key)) {
       if (last_key_valid) {
         continue;
       }
     } else {
-      last_key = gc_iter->key().ToString();
+      last_key = blob_record.key.ToString();
       last_key_valid = false;
     }
 
-    bool discardable = false;
-    s = DiscardEntry(gc_iter->key(), blob_index, &discardable);
+    bool is_discard = false;
+    if (is_delta_records)
+      s = IsDiscardDeltaRecords(delta_records, blob_index, &is_discard);
+    else{
+      s = IsDiscardBlobRecord(blob_record, blob_index, have_delta_compressed, &is_discard);
+    }
+      
     if (!s.ok()) {
       break;
     }
 
-    vector<string> deltas_keys;
-    vector<string> deltas_values;
-    vector<BlobIndex> delta_indexes;
-    // If the base record is invalid, we should make sure all deltas below it
-    // are all invalid then we can discard the base record.
-    if (type == kBaseRecord) {
-      const size_t kDeltasNumber = base_ref;
-      s = IterateDeltasUnderBase(gc_iter, kDeltasNumber, deltas_keys,
-                                 deltas_values, delta_indexes);
-      if (!s.ok())
-        break;
-      DiscardBaseEntry(type, deltas_keys.size(), &discardable);
-    }
-
-    if (discardable) {
+    if (is_discard) {
       metrics_.gc_num_keys_overwritten++;
       metrics_.gc_bytes_overwritten += blob_index.blob_handle.size;
-      //  We don't need to delete records' feature when we discard the record.
-      //  Because when we call Put() or Delete(), the
-      //  feature have already been updated or deleted
       continue;
     }
 
     last_key_valid = true;
 
     // Rewrite entry to new blob file
-    if ((!blob_file_handle && !blob_file_builder) ||
-        file_size >= blob_gc_->titan_cf_options().blob_file_target_size) {
-      if (file_size >= blob_gc_->titan_cf_options().blob_file_target_size) {
-        assert(blob_file_builder);
-        assert(blob_file_handle);
-        assert(blob_file_builder->status().ok());
-        blob_file_builders_.emplace_back(std::make_pair(
-            std::move(blob_file_handle), std::move(blob_file_builder)));
-      }
-      s = blob_file_manager_->NewFile(&blob_file_handle,
-                                      Env::IOPriority::IO_LOW);
-      if (!s.ok()) {
+    if (IsNeedNewBlobFile(blob_file_handle, blob_file_builder)) {
+      s = CreateNewBlobFile(blob_file_handle, blob_file_builder);
+      if (!s.ok())
         break;
-      }
-      TITAN_LOG_INFO(db_options_.info_log,
-                     "Titan new GC output file %" PRIu64 ".",
-                     blob_file_handle->GetNumber());
-      blob_file_builder = std::unique_ptr<BlobFileBuilder>(
-          new BlobFileBuilder(db_options_, blob_gc_->titan_cf_options(),
-                              blob_file_handle->GetFile()));
-      file_size = 0;
     }
     assert(blob_file_handle);
     assert(blob_file_builder);
 
-    BlobRecord blob_record;
-    blob_record.key = gc_iter->key();
-    blob_record.value = gc_iter->value();
     // count written bytes for new blob record,
     // blob index's size is counted in `RewriteValidKeyToLSM`
-    metrics_.gc_bytes_written += blob_record.size();
-
-    // When base is iterated, it will call IterateDeltasUnderBase and iterate
-    // all deltas below base. So this situation can't happen.
-    // TODO(haitao) 修改 assert 为 Titan 的 log
-    assert(type != kDeltaRecord);
-
-    if (delta_compress_type != kNoDeltaCompression) {
-      // blob record or base record can find similar records and use delta
-      // comression.
-      vector<string> similar_keys;
-      feature_index_table.GetSimilarRecordsKeys(gc_iter->key(), similar_keys);
-      if (similar_keys.size() > 0) {
-        size_t before_compress = deltas_keys.size();
-        s = DeltaCompressRecords(blob_record.value, similar_keys, deltas_keys,
-                                 deltas_values, delta_indexes);
-        if(!s.ok())
-          break;
-        metrics_.gc_num_processed_records += deltas_keys.size() - before_compress;
-      }
-    }
+    metrics_.gc_bytes_written += is_delta_records ? delta_records.size() : blob_record.size();
 
     // BlobRecordContext require key to be an internal key. We encode key to
     // internal key in spite we only need the user key.
     std::unique_ptr<BlobFileBuilder::BlobRecordContext> ctx(
         new BlobFileBuilder::BlobRecordContext);
-    InternalKey ikey(blob_record.key, 1, kTypeValue);
+    InternalKey ikey(is_delta_records ? delta_records.key : blob_record.key, 1,
+                     kTypeValue);
     ctx->key = ikey.Encode().ToString();
     ctx->original_blob_index = blob_index;
     ctx->new_blob_index.file_number = blob_file_handle->GetNumber();
-    if (type == kBlobRecord && deltas_keys.size() > 0) {
-      ctx->new_blob_index.type = kBaseRecord;
+
+    vector<string> deltas_keys;
+    vector<string> deltas_values;
+    //TODO(haitao) 对 delta_records 的base继续寻找相似记录然后压缩
+    //             并做一个对比测试，看是否能压缩更多相似数据
+    DeltaCompressType delta_compress_type =
+        blob_gc_->titan_cf_options().blob_file_delta_compression;
+    if (delta_compress_type != kNoDeltaCompression && !is_delta_records) {
+      vector<string> similar_keys;
+      feature_index_table.GetSimilarRecordsKeys(blob_record.key, similar_keys);
+      if (similar_keys.size() > 0) {
+        vector<BlobIndex> delta_indexes;
+        s = DeltaCompressRecords(blob_record.value, similar_keys, deltas_keys,
+                                 deltas_values, delta_indexes);
+        if(!s.ok())
+          break;
+        const size_t kDeltasNumber = deltas_keys.size();
+        if (kDeltasNumber > 0){
+          delta_records = DeltaRecords(blob_record);
+          delta_records.deltas_keys.resize(kDeltasNumber);
+          delta_records.deltas_values.resize(kDeltasNumber);
+          for (size_t i=0; i<deltas_keys.size(); ++i){
+            delta_records.deltas_keys[i] = Slice(deltas_keys[i]);
+            delta_records.deltas_values[i] = Slice(deltas_values[i]);
+          }
+
+          have_delta_compressed.AddDeltaCompressedKeys(deltas_keys);
+          metrics_.gc_num_processed_records += 1 + deltas_keys.size();
+          is_delta_records = true;
+          
+          ctx->is_delta_compressed = true;
+          ctx->deltas_original_indexs = move(delta_indexes);
+          ctx->new_blob_index.type = kDeltaRecords;
+        }
+      }
     }
 
+      
     BlobFileBuilder::OutContexts contexts;
-    blob_file_builder->Add(blob_record, std::move(ctx), &contexts);
+    if (!is_delta_records)
+      blob_file_builder->Add(blob_record, std::move(ctx), &contexts);
+    else
+      blob_file_builder->Add(delta_records, std::move(ctx), &contexts);
 
-    BatchWriteNewIndices(contexts, &s);
-
+    s = BatchWriteNewIndices(contexts);
     if (!s.ok()) {
       break;
     }
-
-    if (deltas_keys.size() > 0) {
-      BlobIndex new_base_index = contexts.back()->new_blob_index;
-
-      s = WriteDeltas(new_base_index, deltas_keys, deltas_values, delta_indexes,
-                  blob_file_handle->GetNumber(),
-                  blob_file_builder);
-      if(!s.ok())
-        break;
-    }
-    // TODO(haitao) 可以再次打开已经被打开的文件并写进去内容吗
-    //  PosixRandomRWFile read_write_file(BlobFileName(titan_db_impl_->dirname_,
-    //  blob_file_handle->GetNumber()), , env_options_);
   }
 
   if (gc_iter->status().ok() && s.ok()) {
-    if (blob_file_builder && blob_file_handle) {
-      assert(blob_file_builder->status().ok());
-      blob_file_builders_.emplace_back(std::make_pair(
-          std::move(blob_file_handle), std::move(blob_file_builder)));
-    } else {
-      assert(!blob_file_builder);
-      assert(!blob_file_handle);
-    }
+    assert(blob_file_builder);
+    assert(blob_file_handle);
+    assert(blob_file_builder->status().ok());
+    blob_file_builders_.emplace_back(std::make_pair(
+        std::move(blob_file_handle), std::move(blob_file_builder)));
   } else if (!gc_iter->status().ok()) {
     return gc_iter->status();
   }
@@ -488,25 +421,23 @@ Status BlobGCJob::DoRunGC() {
   return s;
 }
 
-void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
-                                     Status* s) {
+Status BlobGCJob::BatchWriteNewIndices(const BlobFileBuilder::OutContexts& contexts) {
   auto* cfh = blob_gc_->column_family_handle();
-  for (const std::unique_ptr<BlobFileBuilder::BlobRecordContext>& ctx :
-       contexts) {
+  Status s;
+  for (const auto &ctx : contexts) {
     std::string index_entry;
     BlobIndex original_index = ctx->original_blob_index;
     ParsedInternalKey ikey;
     if (!ParseInternalKey(ctx->key, &ikey)) {
-      *s = Status::Corruption(Slice());
-      return;
+      return Status::Corruption(Slice());
     }
     if (!gc_merge_rewrite_) {
       const BlobIndex &index = ctx->new_blob_index;
-      if(index.type == kDeltaRecord){
-        BlobDeltaIndex delta_index(index);
-        delta_index.base_index = ctx->base_index;
+      if (index.type == kDeltaRecords) {
+        DeltaRecordsIndex delta_index(index);
+        delta_index.delta_index = ctx->delta_index;
         delta_index.EncodeTo(&index_entry);
-      }else{
+      } else {
         index.EncodeTo(&index_entry);
       }
       // Store WriteBatch for rewriting new Key-Index pairs to LSM
@@ -516,7 +447,7 @@ void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
       rewrite_batches_.emplace_back(
           std::make_pair(WriteBatch(), std::move(callback)));
       auto& wb = rewrite_batches_.back().first;
-      *s = WriteBatchInternal::PutBlobIndex(&wb, cfh->GetID(), ikey.user_key,
+      s = WriteBatchInternal::PutBlobIndex(&wb, cfh->GetID(), ikey.user_key,
                                             index_entry);
     } else {
       //TODO 考虑要不要在这里面处理DeltaRecord
@@ -531,11 +462,13 @@ void BlobGCJob::BatchWriteNewIndices(BlobFileBuilder::OutContexts& contexts,
       rewrite_batches_without_callback_.emplace_back(
           std::make_pair(WriteBatch(), original_index.blob_handle.size));
       auto& wb = rewrite_batches_without_callback_.back().first;
-      *s = WriteBatchInternal::Merge(&wb, cfh->GetID(), ikey.user_key,
+      s = WriteBatchInternal::Merge(&wb, cfh->GetID(), ikey.user_key,
                                      index_entry);
     }
-    if (!s->ok()) break;
+    if (!s.ok()) 
+      break;
   }
+  return s;
 }
 
 Status BlobGCJob::BuildIterator(
@@ -564,43 +497,69 @@ Status BlobGCJob::BuildIterator(
   return s;
 }
 
-Status BlobGCJob::DiscardEntry(const Slice& key, const BlobIndex& blob_index,
-                               bool* discardable) {
+Status BlobGCJob::IsKeyInLsmMapToIndex(const Slice& key, const BlobIndex& index,
+                               bool* is_not_map) {
   TitanStopWatch sw(env_, metrics_.gc_read_lsm_micros);
-  assert(discardable != nullptr);
-  PinnableSlice index_entry;
+  assert(is_not_map != nullptr);
+  PinnableSlice index_in_lsm_slice;
   bool is_blob_index = false;
   Status s = base_db_impl_->GetImpl(
-      ReadOptions(), blob_gc_->column_family_handle(), key, &index_entry,
+      ReadOptions(), blob_gc_->column_family_handle(), key, &index_in_lsm_slice,
       nullptr /*value_found*/, nullptr /*read_callback*/, &is_blob_index);
   if (!s.ok() && !s.IsNotFound()) {
     return s;
   }
   // count read bytes for checking LSM entry
-  metrics_.gc_bytes_read += key.size() + index_entry.size();
+  metrics_.gc_bytes_read += key.size() + index_in_lsm_slice.size();
   if (s.IsNotFound() || !is_blob_index) {
     // Either the key is deleted or updated with a newer version which is
     // inlined in LSM.
-    *discardable = true;
+    *is_not_map = true;
     return Status::OK();
   }
 
-  BlobIndex other_blob_index;
-  s = other_blob_index.DecodeFrom(&index_entry);
+  BlobIndex index_in_lsm;
+  s = index_in_lsm.DecodeFrom(&index_in_lsm_slice);
   if (!s.ok()) {
     return s;
   }
 
-  *discardable = !(blob_index == other_blob_index);
+  *is_not_map = !(index == index_in_lsm);
   return Status::OK();
 }
 
-inline void BlobGCJob::DiscardBaseEntry(const BlobType type,
-                                        const uint16_t valid_delta_num,
-                                        bool *discardable) {
-  if (type == kBaseRecord && *discardable == true && valid_delta_num > 0) {
-    *discardable = false;
+Status
+BlobGCJob::IsDiscardBlobRecord(const BlobRecord &record, const BlobIndex &index,
+                               HaveDeltaCompressed &have_delta_compressed,
+                               bool *is_discard) {
+  Status s = IsKeyInLsmMapToIndex(record.key, index, is_discard);
+  if (!s.ok())
+    return s;
+
+  // Delta compressed may already compress this record in the previous GC.
+  // So we can just discard thoese that are already delta compressed.
+  if (*is_discard == false) {
+    *is_discard = have_delta_compressed.IsDiscard(record.key.ToString());
   }
+}
+
+Status BlobGCJob::IsDiscardDeltaRecords(const DeltaRecords &records, const BlobIndex &index, bool *is_discard){
+  Status s = IsKeyInLsmMapToIndex(records.key, index, is_discard);
+  if(!s.ok())
+      return s;
+  // If the base key can't discard, we should keep this whole delta records
+  if(*is_discard == false)
+      return s;
+  for(const Slice &key:records.deltas_keys){
+    s = IsKeyInLsmMapToIndex(key, index, is_discard);
+    if(!s.ok())
+      return s;
+    // If one of the delta key can't discard, we should keep this whole
+    // delta records
+    if(*is_discard == false)
+      return s;
+  }
+  return s;
 }
 
 // We have to make sure crash consistency, but LSM db MANIFEST and BLOB db
@@ -650,7 +609,10 @@ Status BlobGCJob::InstallOutputBlobFiles() {
   for (auto& builder : blob_file_builders_) {
     BlobFileBuilder::OutContexts contexts;
     s = builder.second->Finish(&contexts);
-    BatchWriteNewIndices(contexts, &s);
+    if (!s.ok()) {
+      break;
+    }
+    s = BatchWriteNewIndices(contexts);
     if (!s.ok()) {
       break;
     }

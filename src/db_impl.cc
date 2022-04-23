@@ -681,8 +681,8 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
 
   OwnedSlice decompressed_buffer;
   if (storage) {
-    if(index.type == kDeltaRecord){
-      BlobDeltaIndex delta_index(index);
+    if(index.type == kDeltaRecords){
+      DeltaRecordsIndex delta_index(index);
       BlobRecord base;
       PinnableSlice base_buffer;
       // If the record is a delta record, there should be a base_index

@@ -22,6 +22,29 @@ namespace titandb {
 using std::string;
 using std::vector;
 
+class HaveDeltaCompressed{
+  public:
+  inline bool IsDiscard(const string &key){
+    return IsDeltaCompressedBefore(key);
+  }
+
+  void AddDeltaCompressedKeys(const vector<string> keys) {
+    for (const string &key : keys)
+      have_delta_compressed_keys.insert(key);
+  }
+
+  private:
+  std::unordered_set<std::string> have_delta_compressed_keys;
+  bool IsDeltaCompressedBefore(const string &key) {
+    auto it = have_delta_compressed_keys.find(key);
+    if (it != have_delta_compressed_keys.end()) {
+      have_delta_compressed_keys.erase(it);
+      return true;
+    }
+    return false;
+  }
+};
+
 class BlobGCJob {
 public:
   BlobGCJob(BlobGC *blob_gc, DB *db, TitanDBImpl *titan, port::Mutex *mutex,
@@ -105,15 +128,25 @@ private:
   uint64_t io_bytes_written_ = 0;
 
   Status DoRunGC();
-  void BatchWriteNewIndices(BlobFileBuilder::OutContexts &contexts, Status *s);
+  Status BatchWriteNewIndices(const BlobFileBuilder::OutContexts& contexts);
   Status BuildIterator(std::unique_ptr<BlobFileMergeIterator> *result);
-  Status DiscardEntry(const Slice &key, const BlobIndex &blob_index,
-                      bool *discardable);
-  inline void DiscardBaseEntry(const BlobType type, const uint16_t base_ref,
-                               bool *discardable);
+  Status IsKeyInLsmMapToIndex(const Slice &key, const BlobIndex &blob_index,
+                        bool *discardable);
+  Status IsDiscardDeltaRecords(const DeltaRecords &records,
+                               const BlobIndex &index, bool *is_discard);
+  Status IsDiscardBlobRecord(const BlobRecord &record, const BlobIndex &index,
+                             HaveDeltaCompressed &have_delta_compressed,
+                             bool *is_discard);
   Status InstallOutputBlobFiles();
   Status RewriteValidKeyToLSM();
   Status DeleteInputBlobFiles();
+  inline bool
+  IsBlobFileHitLimit(const std::unique_ptr<BlobFileHandle> &blob_file_handle);
+  bool
+  IsNeedNewBlobFile(const std::unique_ptr<BlobFileHandle> &blob_file_handle,
+                    const std::unique_ptr<BlobFileBuilder> &blob_file_builder);
+  Status CreateNewBlobFile(std::unique_ptr<BlobFileHandle> &blob_file_handle,
+                           std::unique_ptr<BlobFileBuilder> &blob_file_builder);
 
   bool IsShutingDown();
   Status DeltaCompressRecords(const Slice &base,
@@ -121,25 +154,6 @@ private:
                               vector<string> &deltas_keys,
                               vector<string> &deltas_value,
                               vector<BlobIndex> &delta_indexes);
-
-  // Find all delta records beneth the base record
-  // Save thoese valid delta records infomation
-  Status IterateDeltasUnderBase(std::unique_ptr<BlobFileMergeIterator> &gc_iter,
-                                const size_t kDeltasNumber,
-                                vector<string> &keys, vector<string> &values,
-                                vector<BlobIndex> &indexes);
-  // There is two source of deltas
-  // 1. the iterator get a kBlobRecord/kBaseRecord X, and the delta compression
-  // is on. so we find all the similar records of X, and delta compress them
-  // based on X. We call X baes and thoese compressed similar records as deltas.
-  // Then we write the base and the follwing deltas to the blob.
-  // 2. the iterator get a kBaseRecord X, meaning there should be some deltas
-  // based on X. So we read thoese deltas just below the base, dicard those
-  // invalid deltas, and write thos valid deltas below the base
-  Status WriteDeltas(const BlobIndex &new_base_index,
-                     const vector<string> &keys, const vector<string> &values,
-                     vector<BlobIndex> &indexes, uint64_t write_file_number,
-                     const std::unique_ptr<BlobFileBuilder> &blob_file_builder);
 };
 
 }  // namespace titandb

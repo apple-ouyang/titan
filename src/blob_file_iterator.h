@@ -31,6 +31,8 @@ class BlobFileIterator {
   void Next();
   Slice key() const;
   Slice value() const;
+  BlobRecord GetBlobRecord() const { return cur_blob_record_; }
+  DeltaRecords GetDeltaRecords() const { return cur_delta_records_; }
   Status status() const { return status_; }
   uint64_t header_size() const { return header_size_; }
 
@@ -41,15 +43,8 @@ class BlobFileIterator {
     blob_index.file_number = file_number_;
     blob_index.blob_handle.offset = cur_record_offset_;
     blob_index.blob_handle.size = cur_record_size_;
+    blob_index.type = cur_is_delta_records_ ? kDeltaRecords : kBlobRecord;
     return blob_index;
-  }
-
-  BlobIndexDeltaInfo GetBlobIndexDeltaInfo() {
-    BlobIndex blob_index = GetBlobIndex();
-    BlobIndexDeltaInfo index_info;
-    index_info.index = blob_index;
-    index_info.info = delta_info_;
-    return index_info;
   }
 
  private:
@@ -73,6 +68,8 @@ class BlobFileIterator {
   std::vector<char> buffer_;
   OwnedSlice uncompressed_;
   BlobRecord cur_blob_record_;
+  DeltaRecords cur_delta_records_;
+  bool cur_is_delta_records_;
   uint64_t cur_record_offset_;
   uint64_t cur_record_size_;
   uint64_t header_size_;
@@ -81,9 +78,8 @@ class BlobFileIterator {
   uint64_t readahead_end_offset_{0};
   uint64_t readahead_size_{kMinReadaheadSize};
 
-  DeltaInfo delta_info_;
   void PrefetchAndGet();
-  void GetBlobRecord();
+  void ReadBlobAndDecodeRecord();
 };
 
 class BlobFileMergeIterator {
@@ -98,6 +94,8 @@ class BlobFileMergeIterator {
   void Next();
   Slice key() const;
   Slice value() const;
+  BlobRecord GetBlobRecord() const;
+  DeltaRecords GetDeltaRecords() const;
   Status status() const {
     if (current_ != nullptr && !current_->status().ok())
       return current_->status();
@@ -105,9 +103,6 @@ class BlobFileMergeIterator {
   }
 
   BlobIndex GetBlobIndex() { return current_->GetBlobIndex(); }
-  BlobIndexDeltaInfo GetBlobIndexDeltaInfo() {
-    return current_->GetBlobIndexDeltaInfo();
-  }
 
  private:
   class BlobFileIterComparator {

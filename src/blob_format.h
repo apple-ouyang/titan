@@ -69,22 +69,25 @@ struct BlobRecord {
 };
 
 
-// Format of delta block (not fixed size):
+// Format of delta records (not fixed size):
 //
-//    +--------------------+----------------------+--------------------+----------------------+-----+
-//    |      key(base)     |     value(base)      |      key(delta)    |     value(delta)     | ... |
-//    +--------------------+----------------------+--------------------+----------------------+-----+
-//    | Varint64 + key_len | Varint64 + value_len | Varint64 + key_len | Varint64 + value_le  | ... |
-//    +--------------------+----------------------+--------------------+----------------------+-----+
+// +--------------------+----------------------+--------------------+---------------------+-----+
+// |      key(base)     |     value(base)      |      deltas_keys   |    deltas_value     | ... |
+// +--------------------+----------------------+--------------------+---------------------+-----+
+// | Varint64 + key_len | Varint64 + value_len | Varint64 + key_len | Varint64 + value_le | ... |
+// +--------------------+----------------------+--------------------+---------------------+-----+
 //
 // base:  original value, havn't delta compressed.
-// delta: delta compressed value based on base.
-struct DeltaRecords {
-  const static size_t base_index = 0;
-  std::vector<Slice> keys;
-  // values include original base and delta compressed delta.
-  std::vector<Slice> values;
+// delta: delta compressed value based on 'base'.
+struct DeltaRecords : public BlobRecord {
+  std::vector<Slice> deltas_keys;
+  std::vector<Slice> deltas_values;
 
+  DeltaRecords(){};
+  DeltaRecords(BlobRecord blob_record){
+    key = blob_record.key;
+    value = blob_record.value;
+  }
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* src);
 
@@ -136,15 +139,15 @@ struct BlobIndex {
 // Format of delta block index (not fixed size):
 //
 //    +------+-------------+------------------------------------+--------------+
-//    | type | file number |            blob handle             | record_index |
+//    | type | file number |            blob handle             | delta_index |
 //    +------+-------------+------------------------------------+--------------+
 //    | char |  Varint64   | Varint64(offsest) + Varint64(size) |   Varint32   |
 //    +------+-------------+------------------------------------+--------------+
 //
 // The DeltaRecordsIndex will help Titan locate a DeltaRecords.
-// The record_index is the index of the record in the DeltaRecords.
+// The delta_index is the index of the delta in the DeltaRecords.
 struct DeltaRecordsIndex : public BlobIndex {
-  uint32_t record_index;
+  uint32_t delta_index;
 
   DeltaRecordsIndex(BlobIndex index);
 
@@ -202,6 +205,7 @@ public:
   Slice GetHeader() const { return Slice(header_, sizeof(header_)); }
   Slice GetRecord() const { return record_; }
   size_t GetEncodedSize() const { return sizeof(header_) + record_.size(); }
+  void SetIsDeltaCompressed(bool b) { is_delta_compressed_ = b; }
 
 private:
   char header_[kRecordHeaderSize];
@@ -228,10 +232,11 @@ class BlobDecoder {
       : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
 
   Status DecodeHeader(Slice* src);
-  Status DecodeBlobRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer){
+  Status DecodeBlobRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer) {
     return DecodeRecord<BlobRecord>(src, record, buffer);
   }
-  Status DecodeDeltaRecords(Slice *src, DeltaRecords *record, OwnedSlice *buffer){
+  Status DecodeDeltaRecords(Slice *src, DeltaRecords *record,
+                            OwnedSlice *buffer) {
     return DecodeRecord<DeltaRecords>(src, record, buffer);
   }
 
@@ -240,6 +245,7 @@ class BlobDecoder {
   }
 
   size_t GetRecordSize() const { return record_size_; }
+  bool IsDeltaRecords() const { return is_delta_records_; }
 
  private:
   uint32_t crc_{0};
@@ -248,6 +254,7 @@ class BlobDecoder {
   CompressionType compression_{kNoCompression};
   const UncompressionDict* uncompression_dict_;
   DeltaCompressType delta_compression_{kNoDeltaCompression};
+  bool is_delta_records_;
 
   inline Status DecodeBaseIndex(Slice *src);
   Status CheckRecordCrc(const Slice &src);

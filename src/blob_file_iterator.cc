@@ -86,9 +86,14 @@ void BlobFileIterator::Next() {
   PrefetchAndGet();
 }
 
-Slice BlobFileIterator::key() const { return cur_blob_record_.key; }
+Slice BlobFileIterator::key() const {
+  return cur_is_delta_records_ ? cur_delta_records_.key : cur_blob_record_.key;
+}
 
-Slice BlobFileIterator::value() const { return cur_blob_record_.value; }
+Slice BlobFileIterator::value() const {
+  return cur_is_delta_records_ ? cur_delta_records_.value
+                               : cur_blob_record_.value;
+}
 
 void BlobFileIterator::IterateForPrev(uint64_t offset) {
   if (!init_ && !Init()) return;
@@ -120,7 +125,7 @@ void BlobFileIterator::IterateForPrev(uint64_t offset) {
   valid_ = false;
 }
 
-void BlobFileIterator::GetBlobRecord() {
+void BlobFileIterator::ReadBlobAndDecodeRecord() {
   FixedSlice<kRecordHeaderSize> header_buffer;
   // With for_compaction=true, rate_limiter is enabled. Since BlobFileIterator
   // is only used for GC, we always set for_compaction to true.
@@ -138,13 +143,18 @@ void BlobFileIterator::GetBlobRecord() {
   status_ = file_->Read(iterate_offset_ + kRecordHeaderSize, record_size,
                         &record_slice, buffer_.data(), true /*for_compaction*/);
                         //TODO(haitao)搞清楚这里的 for_compraction 有什么用
-  if (status_.ok()) {
-    status_ =
-        decoder_.DecodeRecord(&record_slice, &cur_blob_record_, &uncompressed_);
-  }
   if (!status_.ok()) return;
 
-  delta_info_ = decoder_.GetDeltaInfo();
+  cur_is_delta_records_ = decoder_.IsDeltaRecords();
+  if (cur_is_delta_records_)
+    status_ = decoder_.DecodeDeltaRecords(&record_slice, &cur_delta_records_,
+                                          &uncompressed_);
+  else
+    status_ = decoder_.DecodeBlobRecord(&record_slice, &cur_blob_record_,
+                                        &uncompressed_);
+
+  if (!status_.ok()) return;
+
   cur_record_offset_ = iterate_offset_;
   cur_record_size_ = kRecordHeaderSize + record_size;
   iterate_offset_ += cur_record_size_;
@@ -176,7 +186,7 @@ void BlobFileIterator::PrefetchAndGet() {
     readahead_size_ = std::min(kMaxReadaheadSize, readahead_size_ << 1);
   }
 
-  GetBlobRecord();
+  ReadBlobAndDecodeRecord();
 
   if (readahead_end_offset_ < iterate_offset_) {
     readahead_end_offset_ = iterate_offset_;
@@ -228,6 +238,16 @@ Slice BlobFileMergeIterator::key() const {
 Slice BlobFileMergeIterator::value() const {
   assert(current_ != nullptr);
   return current_->value();
+}
+
+BlobRecord BlobFileMergeIterator::GetBlobRecord() const {
+  assert(current_ != nullptr);
+  return current_->GetBlobRecord();
+}
+
+DeltaRecords BlobFileMergeIterator::GetDeltaRecords() const {
+  assert(current_ != nullptr);
+  return current_->GetDeltaRecords();
 }
 
 }  // namespace titandb

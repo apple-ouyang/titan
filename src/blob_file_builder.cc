@@ -66,6 +66,8 @@ void BlobFileBuilder::Add(const BlobType &record,
     } else {
       encoder_.EncodeRecord(record);
       WriteEncoderData(&ctx->new_blob_index.blob_handle);
+      if (ctx->is_delta_compressed)
+        ctx->WriteDeltaIndexsContexts(out_ctx);
       out_ctx->emplace_back(std::move(ctx));
     }
   }
@@ -75,15 +77,15 @@ void BlobFileBuilder::Add(const BlobRecord &record,
                           std::unique_ptr<BlobRecordContext> ctx,
                           OutContexts *out_ctx){
   Add<BlobRecord>(record, move(ctx), out_ctx);
-  std::string key = record.key.ToString();
-  UpdateKeyRange(key);                          
+  UpdateKeyRange(record.key.ToString());                         
 }
 
 void BlobFileBuilder::Add(const DeltaRecords &records,
                           std::unique_ptr<BlobRecordContext> ctx,
                           OutContexts *out_ctx) {
   Add<DeltaRecords>(records, move(ctx), out_ctx);
-  for (const Slice &key : records.keys) {
+  UpdateKeyRange(records.key.ToString());
+  for (const Slice &key : records.deltas_keys) {
     UpdateKeyRange(key.ToString());
   }
 }
@@ -91,24 +93,24 @@ void BlobFileBuilder::Add(const DeltaRecords &records,
 void BlobFileBuilder::UpdateKeyRange(const std::string &key) {
   // The keys added into blob files are in order.
   // We do key range checks for both state
-  // TODO(haitao) 有没有好办法避免每次都比较大小，每次比较怕是会很慢
-  // TODO(haitao) 测试每次都比较需要消耗多少时间
-  if (smallest_key_.empty() ||
-      cf_options_.comparator->Compare(key, Slice(smallest_key_)) < 0) {
-    smallest_key_.assign(key.data(), key.size());
-  } else if (largest_key_.empty() ||
-             cf_options_.comparator->Compare(key, Slice(largest_key_)) > 0) {
+  if (cf_options_.blob_file_delta_compression == kNoDeltaCompression) {
+    if (smallest_key_.empty()) {
+      smallest_key_.assign(key.data(), key.size());
+    }
+    assert(cf_options_.comparator->Compare(key, Slice(smallest_key_)) >= 0);
+    assert(cf_options_.comparator->Compare(key, Slice(largest_key_)) >= 0);
     largest_key_.assign(key.data(), key.size());
+  } else {
+    // TODO(haitao) 有没有好办法避免每次都比较大小，每次比较怕是会很慢
+    // TODO(haitao) 测试每次都比较需要消耗多少时间
+    if (smallest_key_.empty() ||
+        cf_options_.comparator->Compare(key, Slice(smallest_key_)) < 0) {
+      smallest_key_.assign(key.data(), key.size());
+    } else if (largest_key_.empty() ||
+               cf_options_.comparator->Compare(key, Slice(largest_key_)) > 0) {
+      largest_key_.assign(key.data(), key.size());
+    }
   }
-
-  // if (smallest_key_.empty()) {
-  //   smallest_key_.assign(record.key.data(), record.key.size());
-  // }
-  // assert(cf_options_.comparator->Compare(record.key, Slice(smallest_key_))
-  // >=
-  //        0);
-  // assert(cf_options_.comparator->Compare(record.key, Slice(largest_key_))
-  // >= 0); largest_key_.assign(record.key.data(), record.key.size());
 }
 
 void BlobFileBuilder::AddSmall(std::unique_ptr<BlobRecordContext> ctx) {
@@ -152,10 +154,11 @@ void BlobFileBuilder::FlushSampleRecords(OutContexts* out_ctx) {
          ctx_idx++) {
       out_ctx->emplace_back(std::move(cached_contexts_[ctx_idx]));
     }
-    const std::unique_ptr<BlobRecordContext>& ctx = cached_contexts_[ctx_idx];
+    const auto &ctx = cached_contexts_[ctx_idx];
+    encoder_.SetIsDeltaCompressed(ctx->is_delta_compressed);
     encoder_.CompressAndEncodeHeader(record_str);
     WriteEncoderData(&ctx->new_blob_index.blob_handle);
-    out_ctx->emplace_back(std::move(cached_contexts_[ctx_idx]));
+    out_ctx->emplace_back(std::move(ctx));
   }
   for (; ctx_idx < cached_contexts_.size(); ctx_idx++) {
     assert(cached_contexts_[ctx_idx]->has_value);
