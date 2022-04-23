@@ -140,8 +140,13 @@ FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
   random_transform_args_b_.resize(kFeatureNumber);
 
   for (size_t i = 0; i < kFeatureNumber; ++i) {
+    #ifdef FIX_TRANSFORM_ARGUMENT_TO_KEEP_SAME_SIMILARITY_DETECTION_BETWEEN_TESTS
+    random_transform_args_a_[i] = gear_matrix[i];
+    random_transform_args_b_[i] = gear_matrix[kFeatureNumber+i];
+    #else
     random_transform_args_a_[i] = dis(e);
     random_transform_args_b_[i] = dis(e);
+    #endif
     features_[i] = 0;
   }
 }

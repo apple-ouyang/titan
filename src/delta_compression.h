@@ -54,6 +54,8 @@ const feature_t k1_4RatioMask = 0x0000000100000001;
 // The super feature are used for similarity detection. The more of super
 // features a record have, the bigger feature index table will be.
 
+#define FIX_TRANSFORM_ARGUMENT_TO_KEEP_SAME_SIMILARITY_DETECTION_BETWEEN_TESTS
+
 class FeatureGenerator {
 public:
   static const feature_t kDefaultSampleRatioMask = 0x0000400303410000;
