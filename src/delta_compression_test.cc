@@ -672,12 +672,11 @@ typedef tuple<feature_t, size_t, size_t> TableParameters;
 //                       TableParameters(k1_4RatioMask, 12, 12)
 //                       ));
 
-INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
-                        ::testing::Values(kGDelta, kXDelta, kEDelta));
+// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+//                         ::testing::Values(kGDelta, kXDelta, kEDelta));
 
-// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
-// DeltaCompressionTest,
-//                         ::testing::Values(kGDelta));
+INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+                        ::testing::Values(kGDelta));
 
 } // namespace titandb
 } // namespace rocksdb
