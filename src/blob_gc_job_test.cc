@@ -220,7 +220,7 @@ class BlobGCJobTest : public testing::TestWithParam<bool /*gc_merge_mode*/> {
                           GetParam(), Env::Default(), EnvOptions(), nullptr,
                           blob_file_set_, nullptr, nullptr, nullptr);
     bool discardable = false;
-    ASSERT_OK(blob_gc_job.CheckIfDiscardBlobRecord(key, blob_index, &discardable));
+    ASSERT_OK(blob_gc_job.IsDiscardBlobRecord(key, blob_index, &discardable));
     ASSERT_FALSE(discardable);
   }
 

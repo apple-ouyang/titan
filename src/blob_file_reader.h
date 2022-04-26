@@ -27,7 +27,7 @@ class BlobFileReader {
   // of the record is stored in the provided buffer, so the buffer
   // must be valid when the record is used.
   Status Get(const ReadOptions& options, const BlobHandle& handle,
-             BlobRecord* record, PinnableSlice* buffer);
+             BlobRecord* record, PinnableSlice* buffer, uint32_t delta_index = 0);
 
  private:
   friend class BlobFilePrefetcher;
@@ -37,7 +37,7 @@ class BlobFileReader {
                  TitanStats* stats);
 
   Status ReadRecord(const BlobHandle& handle, BlobRecord* record,
-                    OwnedSlice* buffer);
+                    OwnedSlice* buffer, uint32_t delta_index = 0);
   static Status ReadHeader(std::unique_ptr<RandomAccessFileReader>& file,
                            BlobFileHeader* header);
 

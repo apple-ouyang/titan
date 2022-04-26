@@ -285,7 +285,7 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
   size_t outlen = 0;
   uint32_t delta_size;
   outlen = gencode((uint8_t *)input, input_len, (uint8_t *)base,
-                   (uint32_t)base_len, (uint8_t **)&buff, &delta_size);
+                   (uint32_t)base_len, (uint8_t *)buff, &delta_size);
   *output = string(buff, buff + outlen);
   delete[] buff;
   return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
@@ -301,7 +301,7 @@ bool GDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
                        size_t base_len, char *output, uint32_t *outlen) {
 #ifdef GDELTA_GDELTA_H // TODO(haitao)
   return gdecode((uint8_t *)delta, delta_len, (uint8_t *)base,
-                 (uint32_t)base_len, (uint8_t **)&output, outlen) == 0;
+                 (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
 #else
   (void)input;
   (void)length;
@@ -361,14 +361,13 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
   return false;
 }
 
-Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
-                       const Slice &base, OwnedSlice *output) {
+Status DeltaUncompress(DeltaCompressType type, Slice delta, Slice base,
+                       OwnedSlice *output) {
   int size = 0;
   CacheAllocationPtr ubuf;
   uint32_t original_length;
-  Slice delta_copy(delta);
 
-  if (!GetVarint32(&delta_copy, &original_length)) {
+  if (!GetVarint32(&delta, &original_length)) {
     return Status::Corruption("Currupted delta compression", "original_length");
   }
 
@@ -378,7 +377,7 @@ Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
 
   switch (type) {
   case kXDelta: {
-    if (!XDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+    if (!XDelta_Uncompress(delta.data(), delta.size(), base.data(),
                            base.size(), ubuf.get(), &decompressed_length,
                            original_length)) {
       return Status::Corruption("Corrupted compressed blob", "XDelta");
@@ -387,7 +386,7 @@ Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
     break;
   }
   case kEDelta:
-    if (!EDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+    if (!EDelta_Uncompress(delta.data(), delta.size(), base.data(),
                            base.size(), ubuf.get(),
                            (uint32_t *)&decompressed_length)) {
       return Status::Corruption("Corrupted compressed blob", "EDelta");
@@ -395,7 +394,7 @@ Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
     output->reset(std::move(ubuf), size);
     break;
   case kGDelta:
-    if (!GDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+    if (!GDelta_Uncompress(delta.data(), delta.size(), base.data(),
                            base.size(), ubuf.get(),
                            (uint32_t *)&decompressed_length)) {
       return Status::Corruption("Corrupted compressed blob", "GDelta");

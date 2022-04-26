@@ -232,14 +232,10 @@ class BlobDecoder {
       : BlobDecoder(&UncompressionDict::GetEmptyDict(), kNoCompression) {}
 
   Status DecodeHeader(Slice* src);
-  Status DecodeBlobRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer) {
-    return DecodeRecord<BlobRecord>(src, record, buffer);
-  }
-  Status DecodeDeltaRecords(Slice *src, DeltaRecords *record,
-                            OwnedSlice *buffer) {
-    return DecodeRecord<DeltaRecords>(src, record, buffer);
-  }
-
+  Status DecodeBlobRecord(Slice *src, BlobRecord *record, OwnedSlice *buffer);
+  Status ReadDeltaRecords(Slice *src, DeltaRecords *record, OwnedSlice *buffer);
+  Status DecodeDeltaReocrds(Slice *src, BlobRecord *record, OwnedSlice *buffer,
+                            uint32_t delta_index);
   void SetUncompressionDict(const UncompressionDict* uncompression_dict) {
     uncompression_dict_ = uncompression_dict;
   }
@@ -256,11 +252,16 @@ class BlobDecoder {
   DeltaCompressType delta_compression_{kNoDeltaCompression};
   bool is_delta_records_;
 
-  inline Status DecodeBaseIndex(Slice *src);
-  Status CheckRecordCrc(const Slice &src);
-  Status UncompressRecordIntoBuffer(const Slice &src, OwnedSlice* buffer);
+  // Don't use it in other file. The template is defined in the source file and
+  // declared private to avoid being used in other file. Use DecodeBlobRecord
+  // and DecodeDeltaRecords instead.
   template <typename RecordType>
   Status DecodeRecord(Slice *src, RecordType *record, OwnedSlice *buffer);
+  Status CheckRecordCrc(const Slice &src);
+  Status UncompressRecordIntoBuffer(const Slice &src, OwnedSlice* buffer);
+  Status DeltaUncompressDelta(const DeltaRecords &delta_records,
+                         uint32_t delta_index, BlobRecord *record,
+                         OwnedSlice *buffer);
 };
 
 // Format of blob file meta (not fixed size):

@@ -145,8 +145,8 @@ public:
 bool DeltaCompress(DeltaCompressType type, const Slice &input,
                    const Slice &base, std::string *output);
 
-Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
-                       const Slice &base, OwnedSlice *output);
+Status DeltaUncompress(DeltaCompressType type, Slice delta, Slice base,
+                       OwnedSlice *output);
 
 // 全局变量： TODO：暂时不知道放哪里
 extern FeatureIndexTable feature_index_table;

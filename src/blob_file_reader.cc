@@ -144,7 +144,7 @@ BlobFileReader::BlobFileReader(const TitanCFOptions& options,
 
 Status BlobFileReader::Get(const ReadOptions& /*options*/,
                            const BlobHandle& handle, BlobRecord* record,
-                           PinnableSlice* buffer) {
+                           PinnableSlice* buffer, uint32_t delta_index) {
   TEST_SYNC_POINT("BlobFileReader::Get");
 
   std::string cache_key;
@@ -162,7 +162,7 @@ Status BlobFileReader::Get(const ReadOptions& /*options*/,
   RecordTick(statistics(stats_), TITAN_BLOB_CACHE_MISS);
 
   OwnedSlice blob;
-  Status s = ReadRecord(handle, record, &blob);
+  Status s = ReadRecord(handle, record, &blob, delta_index);
   if (!s.ok()) {
     return s;
   }
@@ -182,7 +182,7 @@ Status BlobFileReader::Get(const ReadOptions& /*options*/,
 }
 
 Status BlobFileReader::ReadRecord(const BlobHandle& handle, BlobRecord* record,
-                                  OwnedSlice* buffer) {
+                                  OwnedSlice* buffer, uint32_t delta_index) {
   Slice blob;
   CacheAllocationPtr ubuf(new char[handle.size]);
   Status s = file_->Read(handle.offset, handle.size, &blob, ubuf.get());
@@ -203,7 +203,12 @@ Status BlobFileReader::ReadRecord(const BlobHandle& handle, BlobRecord* record,
     return s;
   }
   buffer->reset(std::move(ubuf), blob);
-  s = decoder.DecodeRecord(&blob, record, buffer);
+  
+  if (decoder.IsDeltaRecords()){
+    s = decoder.DecodeDeltaReocrds(&blob, record, buffer, delta_index);
+  } else {
+    s = decoder.DecodeBlobRecord(&blob, record, buffer);
+  }
   return s;
 }
 

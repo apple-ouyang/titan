@@ -158,7 +158,7 @@ void BlobFileBuilder::FlushSampleRecords(OutContexts* out_ctx) {
     encoder_.SetIsDeltaCompressed(ctx->is_delta_compressed);
     encoder_.CompressAndEncodeHeader(record_str);
     WriteEncoderData(&ctx->new_blob_index.blob_handle);
-    out_ctx->emplace_back(std::move(ctx));
+    out_ctx->emplace_back(std::move(cached_contexts_[ctx_idx]));
   }
   for (; ctx_idx < cached_contexts_.size(); ctx_idx++) {
     assert(cached_contexts_[ctx_idx]->has_value);

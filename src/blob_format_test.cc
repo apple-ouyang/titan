@@ -83,7 +83,7 @@ TEST(BlobFormatTest, BlobCompressionLZ4) {
 
   BlobRecord decoded_record;
   OwnedSlice blob;
-  decoder.DecodeRecord(&encoded_record, &decoded_record, &blob);
+  decoder.DecodeBlobRecord(&encoded_record, &decoded_record, &blob);
 
   ASSERT_EQ(record, decoded_record);
 }

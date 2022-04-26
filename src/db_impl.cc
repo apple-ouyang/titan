@@ -1,4 +1,5 @@
 #include "db_impl.h"
+#include "blob_format.h"
 #include <cassert>
 
 #ifndef __STDC_FORMAT_MACROS
@@ -679,60 +680,37 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
   auto storage = blob_file_set_->GetBlobStorage(handle->GetID()).lock();
   mutex_.Unlock();
 
-  OwnedSlice decompressed_buffer;
-  if (storage) {
-    if(index.type == kDeltaRecords){
-      DeltaRecordsIndex delta_index(index);
-      BlobRecord base;
-      PinnableSlice base_buffer;
-      // If the record is a delta record, there should be a base_index
-      // behind the blob_index. Use the base_index to read the base, and after
-      // uncompressing we can get the value
-
-      //TODO(haitao) 给所有以下return s 的代码加上log
-      s = delta_index.DecodeFromBehindBase(value);
-      if(!s.ok())
-        return s;
-
-      //TODO(haitao) 这里的统计信息要不要改
-      StopWatch read_sw(env_, statistics(stats_.get()),
-                      TITAN_BLOB_FILE_READ_MICROS);
-      // read base
-      s = storage->Get(options, delta_index.base_index, &base, &base_buffer);
-      if(!s.ok())
-        return s;
-      // read delta，and use base to uncompress
-      s = storage->Get(options, index, &record, &buffer);
-      if(!s.ok())
-        return s;
-      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
-      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
-                index.blob_handle.size);
-      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
-                delta_index.base_index.blob_handle.size);
-      DeltaCompressType delta_compress_type =
-          storage->cf_options().blob_file_delta_compression;
-
-      s = DeltaUncompress(delta_compress_type, record.value, base.value, &decompressed_buffer);
-      if(!s.ok())
-        return s;
-      record.value = decompressed_buffer;
-    }else{
-      // the base record or the blob record are not delta compressed
-      // so just get the value
-      StopWatch read_sw(env_, statistics(stats_.get()),
-                      TITAN_BLOB_FILE_READ_MICROS);
-      s = storage->Get(options, index, &record, &buffer);
-      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
-      RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
-                index.blob_handle.size);
-    }
-  } else {
+  if (!storage){
     TITAN_LOG_ERROR(db_options_.info_log,
                     "Column family id:%" PRIu32 " not Found.", handle->GetID());
     return Status::NotFound(
         "Column family id: " + std::to_string(handle->GetID()) + " not Found.");
   }
+
+  if (index.type == kBlobRecord) {
+    StopWatch read_sw(env_, statistics(stats_.get()),
+                      TITAN_BLOB_FILE_READ_MICROS);
+    s = storage->Get(options, index, &record, &buffer);
+  } else if (index.type == kDeltaRecords) {
+    DeltaRecordsIndex delta_record_index(index);
+    // If the record is a delta record, there should be a delta_index
+    // behind the blob_index. Use it to read the specific delta in the
+    // delta records.
+
+    s = delta_record_index.DecodeFromBehindBase(value);
+    if (!s.ok())
+      return s;
+
+    StopWatch read_sw(env_, statistics(stats_.get()),
+                      TITAN_BLOB_FILE_READ_MICROS);
+    s = storage->Get(options, index, &record, &buffer,
+                     delta_record_index.delta_index);
+  }
+
+  RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_NUM_KEYS_READ);
+  RecordTick(statistics(stats_.get()), TITAN_BLOB_FILE_BYTES_READ,
+             index.blob_handle.size);
+
   if (s.IsCorruption()) {
     TITAN_LOG_ERROR(db_options_.info_log,
                     "Key:%s Snapshot:%" PRIu64 " GetBlobFile err:%s\n",

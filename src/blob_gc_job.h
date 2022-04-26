@@ -25,7 +25,7 @@ using std::vector;
 class HaveDeltaCompressed{
   public:
   inline bool IsDiscard(const string &key){
-    return IsDeltaCompressedBefore(key);
+    return IsHaveDeltaCompressed(key);
   }
 
   void AddDeltaCompressedKeys(const vector<string> keys) {
@@ -35,7 +35,7 @@ class HaveDeltaCompressed{
 
   private:
   std::unordered_set<std::string> have_delta_compressed_keys;
-  bool IsDeltaCompressedBefore(const string &key) {
+  bool IsHaveDeltaCompressed(const string &key) {
     auto it = have_delta_compressed_keys.find(key);
     if (it != have_delta_compressed_keys.end()) {
       have_delta_compressed_keys.erase(it);
@@ -134,9 +134,10 @@ private:
                         bool *discardable);
   Status IsDiscardDeltaRecords(const DeltaRecords &records,
                                const BlobIndex &index, bool *is_discard);
-  Status IsDiscardBlobRecord(const BlobRecord &record, const BlobIndex &index,
-                             HaveDeltaCompressed &have_delta_compressed,
-                             bool *is_discard);
+  Status
+  IsDiscardBlobRecord(const Slice &key, const BlobIndex &index,
+                      bool *is_discard,
+                      HaveDeltaCompressed *have_delta_compressed = nullptr);
   Status InstallOutputBlobFiles();
   Status RewriteValidKeyToLSM();
   Status DeleteInputBlobFiles();

@@ -147,7 +147,7 @@ void BlobFileIterator::ReadBlobAndDecodeRecord() {
 
   cur_is_delta_records_ = decoder_.IsDeltaRecords();
   if (cur_is_delta_records_)
-    status_ = decoder_.DecodeDeltaRecords(&record_slice, &cur_delta_records_,
+    status_ = decoder_.ReadDeltaRecords(&record_slice, &cur_delta_records_,
                                           &uncompressed_);
   else
     status_ = decoder_.DecodeBlobRecord(&record_slice, &cur_blob_record_,

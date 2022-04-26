@@ -1,5 +1,6 @@
 #include "blob_format.h"
 
+#include "delta_compression.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
 #include "test_util/sync_point.h"
@@ -160,6 +161,40 @@ Status BlobDecoder::DecodeRecord(Slice *src, RecordType *record,
     return s;
 
   return DecodeInto(*buffer, record);
+}
+
+Status BlobDecoder::DecodeBlobRecord(Slice *src, BlobRecord *record,
+                                     OwnedSlice *buffer) {
+  return DecodeRecord<BlobRecord>(src, record, buffer);
+}
+
+Status BlobDecoder::ReadDeltaRecords(Slice *src, DeltaRecords *record,
+                                     OwnedSlice *buffer) {
+  return DecodeRecord<DeltaRecords>(src, record, buffer);
+}
+
+Status BlobDecoder::DecodeDeltaReocrds(Slice *src, BlobRecord *record,
+                                       OwnedSlice *buffer,
+                                       uint32_t delta_index) {
+  DeltaRecords delta_records;
+  Status s = ReadDeltaRecords(src, &delta_records, buffer);
+  if (!s.ok())
+    return s;
+  s = DeltaUncompressDelta(delta_records, delta_index, record, buffer);
+  return s;
+}
+
+Status BlobDecoder::DeltaUncompressDelta(const DeltaRecords &delta_records,
+                                    uint32_t delta_index, BlobRecord *record,
+                                    OwnedSlice *buffer) {
+  Slice base = delta_records.value;
+  Slice delta = delta_records.deltas_values[delta_index];
+  Status s = DeltaUncompress(delta_compression_, delta, base, buffer);
+  if (!s.ok())
+    return s;
+  record->key = delta_records.deltas_keys[delta_index];
+  record->value = *buffer;
+  return s;
 }
 
 void BlobHandle::EncodeTo(std::string* dst) const {

@@ -126,6 +126,7 @@ Status BlobGCJob::DeltaCompressRecords(const Slice &base,
       continue;
     }
     clock_gettime(CLOCK_MONOTONIC, &stop);
+    
     // count written bytes for new blob record,
     // blob index's size is counted in `RewriteValidKeyToLSM`
     metrics_.gc_bytes_written += delta.size() + similar_keys[i].size();
@@ -293,6 +294,8 @@ Status BlobGCJob::DoRunGC() {
     metrics_.gc_num_processed_records++;
     BlobIndex blob_index = gc_iter->GetBlobIndex();
     bool is_delta_records = blob_index.type == kDeltaRecords;
+    DeltaCompressType delta_compress_type =
+        blob_gc_->titan_cf_options().blob_file_delta_compression;
     BlobRecord blob_record;
     DeltaRecords delta_records;
     BlobRecord base_record;
@@ -321,7 +324,10 @@ Status BlobGCJob::DoRunGC() {
     if (is_delta_records)
       s = IsDiscardDeltaRecords(delta_records, blob_index, &is_discard);
     else{
-      s = IsDiscardBlobRecord(blob_record, blob_index, have_delta_compressed, &is_discard);
+      if (delta_compress_type != kNoDeltaCompression)
+        s = IsDiscardBlobRecord(blob_record.key, blob_index, &is_discard, &have_delta_compressed);
+      else
+        s = IsDiscardBlobRecord(blob_record.key, blob_index, &is_discard);
     }
       
     if (!s.ok()) {
@@ -353,7 +359,7 @@ Status BlobGCJob::DoRunGC() {
     // internal key in spite we only need the user key.
     std::unique_ptr<BlobFileBuilder::BlobRecordContext> ctx(
         new BlobFileBuilder::BlobRecordContext);
-    InternalKey ikey(is_delta_records ? delta_records.key : blob_record.key, 1,
+    InternalKey ikey(is_delta_records ? base_record.key : blob_record.key, 1,
                      kTypeValue);
     ctx->key = ikey.Encode().ToString();
     ctx->original_blob_index = blob_index;
@@ -363,15 +369,13 @@ Status BlobGCJob::DoRunGC() {
     vector<string> deltas_values;
     //TODO(haitao) 对 delta_records 的base继续寻找相似记录然后压缩
     //             并做一个对比测试，看是否能压缩更多相似数据
-    DeltaCompressType delta_compress_type =
-        blob_gc_->titan_cf_options().blob_file_delta_compression;
     if (delta_compress_type != kNoDeltaCompression && !is_delta_records) {
       vector<string> similar_keys;
       feature_index_table.GetSimilarRecordsKeys(blob_record.key, similar_keys);
       if (similar_keys.size() > 0) {
-        vector<BlobIndex> delta_indexes;
-        s = DeltaCompressRecords(blob_record.value, similar_keys, deltas_keys,
-                                 deltas_values, delta_indexes);
+        vector<BlobIndex> deltas_indexes;
+        s = DeltaCompressRecords(base_record.value, similar_keys, deltas_keys,
+                                 deltas_values, deltas_indexes);
         if(!s.ok())
           break;
         const size_t kDeltasNumber = deltas_keys.size();
@@ -389,7 +393,7 @@ Status BlobGCJob::DoRunGC() {
           is_delta_records = true;
           
           ctx->is_delta_compressed = true;
-          ctx->deltas_original_indexs = move(delta_indexes);
+          ctx->deltas_original_indexs = move(deltas_indexes);
           ctx->new_blob_index.type = kDeltaRecords;
         }
       }
@@ -529,18 +533,19 @@ Status BlobGCJob::IsKeyInLsmMapToIndex(const Slice& key, const BlobIndex& index,
 }
 
 Status
-BlobGCJob::IsDiscardBlobRecord(const BlobRecord &record, const BlobIndex &index,
-                               HaveDeltaCompressed &have_delta_compressed,
-                               bool *is_discard) {
-  Status s = IsKeyInLsmMapToIndex(record.key, index, is_discard);
+BlobGCJob::IsDiscardBlobRecord(const Slice &key, const BlobIndex &index,
+                               bool *is_discard,
+                               HaveDeltaCompressed *have_delta_compressed) {
+  Status s = IsKeyInLsmMapToIndex(key, index, is_discard);
   if (!s.ok())
     return s;
 
   // Delta compressed may already compress this record in the previous GC.
   // So we can just discard thoese that are already delta compressed.
-  if (*is_discard == false) {
-    *is_discard = have_delta_compressed.IsDiscard(record.key.ToString());
+  if (have_delta_compressed != nullptr && *is_discard == false) {
+    *is_discard = have_delta_compressed->IsDiscard(key.ToString());
   }
+  return Status::OK();
 }
 
 Status BlobGCJob::IsDiscardDeltaRecords(const DeltaRecords &records, const BlobIndex &index, bool *is_discard){
