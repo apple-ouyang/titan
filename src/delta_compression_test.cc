@@ -33,6 +33,63 @@ namespace fs = boost::filesystem;
 using namespace fs;
 using namespace std;
 
+struct HumanReadable {
+  uintmax_t size_;
+  HumanReadable(size_t size = 0) : size_(size){};
+  std::string ToString(bool with_byte = true) {
+    int magnitude = 0;
+    double mantissa = size_;
+    while (mantissa >= 1024) {
+      mantissa /= 1024.;
+      ++magnitude;
+    }
+
+    mantissa = ceil(mantissa * 10.) / 10.;
+
+    stringstream ss;
+    ss << fixed << setprecision(2) << mantissa;
+    string res = ss.str();
+    res += "BKMGTPE"[magnitude];
+    if (magnitude > 0) {
+      res += 'B';
+      if (with_byte)
+        res += '(' + to_string(size_) + ')';
+    }
+
+    return res;
+  }
+
+private:
+  friend ostream &operator<<(ostream &os, HumanReadable hr) {
+    return os << hr.ToString();
+  }
+};
+
+string exec(const char *cmd) {
+  array<char, 128> buffer;
+  string result;
+  unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+  if (!pipe) {
+    throw runtime_error("popen() failed!");
+  }
+  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+    result += buffer.data();
+  }
+  return result;
+}
+
+size_t RunCmdReturnSize(string cmd) {
+  string res = exec(cmd.c_str());
+  size_t size;
+  sscanf(res.c_str(), "%zu", &size);
+  return size;
+}
+
+size_t GetDatabaseSize(string db_path) {
+  string cmd = "du -s " + db_path;
+  return RunCmdReturnSize(cmd) * 1024;
+}
+
 class DataReader {
 public:
   DataReader(size_t expected_percentage = 100)
@@ -52,69 +109,25 @@ public:
   const path stack_overflow_directory = data_path / "stackExchange";
   const path stack_overflow_comment_file = data_path / "Comments.xml";
 
-  string exec(const char *cmd) {
-    array<char, 128> buffer;
-    string result;
-    unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (!pipe) {
-      throw runtime_error("popen() failed!");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-      result += buffer.data();
-    }
-    return result;
-  }
-
   size_t CountWikipediaHtmls(void) {
     string cmd = "find " + wiki_directory.string() + " -name '*.html' | wc -l";
-    string res = exec(cmd.c_str());
-    size_t size;
-    sscanf(res.c_str(), "%zu", &size);
-    return size;
+    return RunCmdReturnSize(cmd);
   }
 
   size_t CountEnronEmails(void) {
     string cmd = "find " + enron_email_directory.string() + " | wc -l";
-    string res = exec(cmd.c_str());
-    size_t size;
-    sscanf(res.c_str(), "%zu", &size);
-    return size;
+    return RunCmdReturnSize(cmd);
   }
 
   size_t CountStackOverFlowXmlFiles() {
     string cmd = "find " + stack_overflow_directory.string() + " | wc -l";
-    string res = exec(cmd.c_str());
-    size_t size;
-    sscanf(res.c_str(), "%zu", &size);
-    return size;
+    return RunCmdReturnSize(cmd);
   }
 
   size_t CountLinesOfStackOverFlowComment() {
     string cmd = "wc -l " + stack_overflow_comment_file.string();
-    string res = exec(cmd.c_str());
-    size_t size;
-    sscanf(res.c_str(), "%zu", &size);
-    return size;
+    return RunCmdReturnSize(cmd);
   }
-
-  struct HumanReadable {
-    uintmax_t size_;
-    HumanReadable(size_t size = 0) : size_(size){};
-
-  private:
-    friend ostream &operator<<(ostream &os, HumanReadable hr) {
-      int magnitude = 0;
-      double mantissa = hr.size_;
-      while (mantissa >= 1024) {
-        mantissa /= 1024.;
-        ++magnitude;
-      }
-
-      mantissa = ceil(mantissa * 10.) / 10.;
-      os << mantissa << "BKMGTPE"[magnitude];
-      return magnitude == 0 ? os : os << "B (" << hr.size_ << ')';
-    }
-  };
 
   void ReadDataPrepare(const DataSetType type) {
     printf("Scaning the number of files that can be Put into the "
@@ -370,9 +383,6 @@ public:
     ASSERT_TRUE(s.ok());
   }
 
-  void (DeltaCompressionTest::*Putp)(const string &, const string &) =
-      &DeltaCompressionTest::Put;
-
   DeltaCompressionTest() : DataReader(100), dbname_(test::TmpDir()) {
     options_.dirname = dbname_ + "/titandb";
     options_.create_if_missing = true;
@@ -440,13 +450,15 @@ public:
   }
 
   struct Statistics {
-    uint64_t gc_processed_records = 0;
-    uint64_t delta_compressed_records_num = 0;
-    uint64_t delta_compressed_records_original_size = 0;
-    uint64_t delta_compressed_records_delta_size = 0;
-    string delta_compression_str = "unknown";
-    timespec gc_delta_compressed_time{};
-    uint64_t gc_delta_compressed_failed_number = 0;
+    uint64_t gc_number = 0;
+    uint64_t compressed_number = 0;
+    HumanReadable delta_before_size{};
+    HumanReadable delta_after_size{};
+    string method = "unknown";
+    timespec compressed_time{};
+    uint64_t fail_number = 0;
+    HumanReadable database_before_size{};
+    HumanReadable database_after_size{};
 
     void AddTimespec(timespec &time, const timespec &addtime) {
       time.tv_sec += addtime.tv_sec;
@@ -462,60 +474,49 @@ public:
     }
 
     void Update(const BlobGCJob::Metrics &metrics) {
-      gc_processed_records += metrics.gc_num_processed_records;
-      delta_compressed_records_original_size +=
-          metrics.gc_before_delta_compressed_size;
-      delta_compressed_records_delta_size +=
-          metrics.gc_after_delta_compressed_size;
-      delta_compressed_records_num += metrics.gc_delta_compressed_record;
-      gc_delta_compressed_failed_number +=
-          metrics.gc_delta_compressed_failed_number;
-      AddTimespec(gc_delta_compressed_time, metrics.gc_delta_compressed_time);
+      gc_number += metrics.gc_num_processed_records;
+      delta_before_size.size_ += metrics.gc_before_delta_compressed_size;
+      delta_after_size.size_ += metrics.gc_after_delta_compressed_size;
+      compressed_number += metrics.gc_delta_compressed_record;
+      fail_number += metrics.gc_delta_compressed_failed_number;
+      AddTimespec(compressed_time, metrics.gc_delta_compressed_time);
     }
 
     void GetTypeString(DeltaCompressType type) {
       for (auto &delta_compression_type :
            TitanOptionsHelper::delta_compression_type_string_map) {
         if (delta_compression_type.second == type) {
-          delta_compression_str = delta_compression_type.first;
+          method = delta_compression_type.first;
           break;
         }
       }
     }
 
     void Print() {
-      printf("\n#######  garbage collection complete  #######\n");
-      printf("%zu records have been garbage collected\n", gc_processed_records);
-      printf("%zu similar records have been compressed by %s\n",
-             delta_compressed_records_num, delta_compression_str.c_str());
-      HumanReadable original_size(delta_compressed_records_original_size),
-          delta_size(delta_compressed_records_delta_size);
-      cout << original_size << " are compressed to " << delta_size << '\n';
-      printf("%.2f is the compression ratio\n",
-             (double)delta_compressed_records_original_size /
-                 delta_compressed_records_delta_size);
-      printf("%.2fs is the delta compress time\n",
-             TimespecToSeconds(gc_delta_compressed_time));
-      printf("%zu records compressed fail\n",
-             gc_delta_compressed_failed_number);
-      printf("#############################################\n\n");
+      double delta_ratio =
+          (double)delta_before_size.size_ / delta_after_size.size_;
+      double database_ratio =
+          (double)database_before_size.size_ / database_after_size.size_;
+      double time = TimespecToSeconds(compressed_time);
+      putchar('\n');
+      printf(
+          "| method  | compress fail | compress success | delta size | delta "
+          "after size | delta compress ratio | compress time | database size | "
+          "database after size | database compress ratio |\n");
+      printf(
+          "| ------- | ------------- | ---------------- | ---------- | "
+          "---------------- | -------------------- | ------------- | "
+          "------------- | ------------------- | ----------------------- |\n");
+      printf("| %s\t | %zu\t | %zu\t | %s\t | %s\t | %.2f\t | "
+             "%.2fs\t |  %s\t | %s\t | %.2f\t |",
+             method.c_str(), fail_number, compressed_number,
+             delta_before_size.ToString(false).c_str(),
+             delta_after_size.ToString(false).c_str(), delta_ratio, time,
+             database_before_size.ToString(false).c_str(),
+             database_after_size.ToString(false).c_str(), database_ratio);
       fflush(stdout);
     }
   };
-
-  // bool IsFinishGC(const Statistics &statitics) {
-  //   double gc_ratio = (double)statitics.gc_processed_records /
-  //   total_records_; double avalible_compressed_ratio =
-  //       (double)feature_index_table.CountAllSimilarRecords() /
-  //       total_records_;
-  //   printf("GC complete %.2f%%, there are %.2f%% records can be delta "
-  //          "compressed\n",
-  //          gc_ratio, avalible_compressed_ratio);
-  //   if (avalible_compressed_ratio < 0.1 || gc_ratio > 0.9)
-  //     return true;
-  //   else
-  //     return false;
-  // }
 
   bool IsKeepGC(uint64_t gc_processed_records) {
     double gc_ratio = (double)gc_processed_records / total_records_;
@@ -526,6 +527,8 @@ public:
 
   // TODO unifiy this and TitanDBImpl::TEST_StartGC
   void RunGC() {
+    Statistics statistics;
+    statistics.database_before_size.size_ = GetDatabaseSize(dbname_);
     cout << "Start garbage collection!" << endl;
     MutexLock l(mutex_);
     Status s;
@@ -535,8 +538,6 @@ public:
     TitanDBOptions db_options = options_;
     TitanCFOptions cf_options = options_;
     LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL, db_options.info_log.get());
-
-    Statistics statistics;
 
     unique_ptr<BlobGC> blob_gc;
     do {
@@ -577,9 +578,10 @@ public:
       tdb_->PurgeObsoleteFiles();
       mutex_->Lock();
     } while (blob_gc != nullptr && blob_gc->trigger_next() &&
-             IsKeepGC(statistics.gc_processed_records));
+             IsKeepGC(statistics.gc_number));
     // } while (blob_gc != nullptr && blob_gc->trigger_next());
     statistics.GetTypeString(options_.blob_file_delta_compression);
+    statistics.database_after_size.size_ = GetDatabaseSize(dbname_);
     statistics.Print();
   }
 
@@ -656,9 +658,9 @@ private:
 //   TestStackOverFlowComment();
 // }
 
-TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
+// TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
 TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
-TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
+// TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
 // TEST_P(DeltaCompressionTest, StackOverFlowComment) {
 //   TestStackOverFlowComment();
 // }
@@ -672,12 +674,12 @@ typedef tuple<feature_t, size_t, size_t> TableParameters;
 //                       TableParameters(k1_4RatioMask, 12, 12)
 //                       ));
 
-// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
-//                         ::testing::Values(kGDelta, kXDelta, kEDelta));
+INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+                        ::testing::Values(kGDelta, kXDelta, kEDelta));
 
-INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
-DeltaCompressionTest,
-                        ::testing::Values(kGDelta));
+// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
+// DeltaCompressionTest,
+//                         ::testing::Values(kGDelta));
 
 } // namespace titandb
 } // namespace rocksdb
