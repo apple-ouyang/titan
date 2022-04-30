@@ -27,9 +27,9 @@ typedef uint64_t feature_t;
 typedef XXH64_hash_t super_feature_t;
 typedef vector<super_feature_t> SuperFeatures;
 
-// The Mask has 7 bits of 1's, so the sample rate is 1/(2^7)=1/128. It means the
-// number of sampled chunks to generate feature will be 1/128 of the all sliding
-// window chunks.
+// The Mask has X bits of 1's, so the sample rate is 1/(2^X). It means the
+// number of sampled chunks to generate feature will be 1/(2^X) of the all
+// sliding window chunks.
 
 // 1/(2^9)=1/512
 const feature_t k1_512RatioMask = 0x0100400303410010;
@@ -42,12 +42,12 @@ const feature_t k1_128RatioMask = 0x0000400303410000;
 
 // 1/(2^2)=1/4
 const feature_t k1_4RatioMask = 0x0000000100000001;
-// The super feature are used for similarity detection. The more of super
-// features a record have, the bigger feature index table will be.
+
+#define FIX_TRANSFORM_ARGUMENT_TO_KEEP_SAME_SIMILARITY_DETECTION_BETWEEN_TESTS
 
 class FeatureGenerator {
 public:
-  static const feature_t kDefaultSampleRatioMask = 0x0000400303410000;
+  static const feature_t kDefaultSampleRatioMask = k1_128RatioMask;
   static const size_t kDefaultFeatureNumber = 12;
   static const size_t kDefaultSuperFeatureNumber = 3;
 
@@ -87,6 +87,8 @@ private:
   vector<feature_t> random_transform_args_b_;
 
   const feature_t kSampleRatioMask;
+  // The super feature are used for similarity detection. The more of super
+  // features a record have, the bigger feature index table will be.
   const size_t kFeatureNumber;
   const size_t kSuperFeatureNumber;
 };
@@ -102,7 +104,8 @@ public:
   // index the key-feature
   void Put(const Slice &key, const Slice &value);
 
-  // Delete (key,3 super feature) pair and 3 ( super feature,key) pairs
+  // Delete (key, feature_number of super feature) pair and
+  // feature_number of (super feature,key) pairs
   inline void Delete(const Slice &key) { Delete(key.ToString()); }
 
   void RangeDelete(const Slice &start, const Slice &end);
@@ -113,7 +116,8 @@ public:
   // After that, remove key from the key-feature table
   void GetSimilarRecordsKeys(const Slice &key, vector<string> &similar_keys);
 
-  size_t CountAllSimilarRecords();
+  // count all similar records that can be delta compressed
+  size_t CountAllSimilarRecords() const;
 
 private:
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;
@@ -148,7 +152,7 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
 Status DeltaUncompress(DeltaCompressType type, Slice delta, Slice base,
                        OwnedSlice *output);
 
-// 全局变量： TODO：暂时不知道放哪里
+// TODO(haitao)：可能可以放到 column family 里面
 extern FeatureIndexTable feature_index_table;
 
 } // namespace titandb

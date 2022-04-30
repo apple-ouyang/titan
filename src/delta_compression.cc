@@ -27,7 +27,7 @@ void FeatureIndexTable::Delete(const string &key) {
 
 void FeatureIndexTable::ExecuteDelete(const string &key,
                                       const SuperFeatures &super_features) {
-  for (const auto &sf : super_features) {
+  for (const super_feature_t &sf : super_features) {
     feature_key_table_[sf].erase(key);
   }
   key_feature_table_.erase(key);
@@ -39,7 +39,7 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
   for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
     auto key = key_feature->first;
     auto super_features = key_feature->second;
-    for (auto f : super_features) {
+    for (const super_feature_t &f : super_features) {
       feature_key_table_[f].erase(key);
     }
   }
@@ -54,7 +54,7 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
 
   super_features = feature_generator_.GenerateSuperFeatures(value);
   key_feature_table_[k] = super_features;
-  for (const auto &sf : super_features) {
+  for (const super_feature_t &sf : super_features) {
     feature_key_table_[sf].insert(k);
   }
 }
@@ -78,7 +78,7 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
   }
 }
 
-size_t FeatureIndexTable::CountAllSimilarRecords() {
+size_t FeatureIndexTable::CountAllSimilarRecords() const {
   size_t num = 0;
   unordered_set<string> similar_keys;
   for (auto it : feature_key_table_) {
@@ -102,7 +102,7 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
     return;
   }
 
-  for (const auto &sf : super_features) {
+  for (const super_feature_t &sf : super_features) {
     for (string similar_key : feature_key_table_[sf]) {
       if (similar_key != k) {
         similar_keys.emplace_back(move(similar_key));
@@ -131,8 +131,13 @@ FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
   random_transform_args_b_.resize(kFeatureNumber);
 
   for (size_t i = 0; i < kFeatureNumber; ++i) {
+#ifdef FIX_TRANSFORM_ARGUMENT_TO_KEEP_SAME_SIMILARITY_DETECTION_BETWEEN_TESTS
+    random_transform_args_a_[i] = gear_matrix[i];
+    random_transform_args_b_[i] = gear_matrix[kFeatureNumber + i];
+#else
     random_transform_args_a_[i] = dis(e);
     random_transform_args_b_[i] = dis(e);
+#endif
     features_[i] = 0;
   }
 }
@@ -195,15 +200,11 @@ bool XDelta_Compress(const char *input, size_t input_len, const char *base,
     return false;
   const size_t kMaxOutLen = input_len * 2;
   unsigned char *buff = new unsigned char[kMaxOutLen];
-  // output->resize(kMaxOutLen);
-  size_t outlen;
+  size_t outlen = 0;
   int s = xd3_encode_memory((uint8_t *)input, input_len, (uint8_t *)base,
                             base_len, (uint8_t *)buff, &outlen, kMaxOutLen, 0);
-  output->clear();
-  *output = string(buff, buff + outlen);
+  output->assign(buff, buff + outlen);
   delete[] buff;
-  // output->assign(buff, outlen);
-  // output->resize(outlen);
   return s == 0;
 #else
   (void)input;
@@ -232,8 +233,8 @@ bool EDelta_Compress(const char *input, size_t input_len, const char *base,
                      size_t base_len, ::std::string *output) {
 #ifdef _EDELTA_H // TODO(haitao) 可能是 EDELTA
                  // ，需要看一下这里的逻辑，比如cmake文件，先这样写把
-  if (input_len >
-      std::numeric_limits<uint32_t>::max()) { // TODO(haitao) 确认一下
+  if (input_len > std::numeric_limits<uint32_t>::max() ||
+      base_len > std::numeric_limits<uint32_t>::max()) {
     // Can't compress more than 4GB
     return false;
   }
@@ -244,7 +245,7 @@ bool EDelta_Compress(const char *input, size_t input_len, const char *base,
   uint32_t outlen = 0;
   EDeltaEncode((uint8_t *)input, input_len, (uint8_t *)base, (uint32_t)base_len,
                (uint8_t *)buff, &outlen);
-  *output = string(buff, buff + outlen);
+  output->assign(buff, buff + outlen);
   delete[] buff;
   return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
 #else
@@ -259,8 +260,9 @@ bool EDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
                        size_t base_len, char *output, uint32_t *outlen) {
 #ifdef _EDELTA_H // TODO(haitao) 可能是 EDELTA
                  // ，需要看一下这里的逻辑，比如cmake文件，先这样写把
-  return EDeltaDecode((uint8_t *)delta, delta_len, (uint8_t *)base,
-                      (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
+  EDeltaDecode((uint8_t *)delta, delta_len, (uint8_t *)base, (uint32_t)base_len,
+               (uint8_t *)output, outlen);
+  return true;
 #else
   (void)input;
   (void)length;
@@ -273,8 +275,8 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
                      size_t base_len, ::std::string *output) {
 #ifdef GDELTA_GDELTA_H // TODO(haitao)
   // 可能是XDELTA，需要看一下这里的逻辑，比如cmake文件，先这样写把
-  if (input_len >
-      std::numeric_limits<uint32_t>::max()) { // TODO(haitao) 确认一下
+  if (input_len > std::numeric_limits<uint32_t>::max() ||
+      base_len > std::numeric_limits<uint32_t>::max()) {
     // Can't compress more than 4GB
     return false;
   }
@@ -282,11 +284,10 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
     return false;
   const size_t kMaxOutLen = input_len * 2;
   unsigned char *buff = new unsigned char[kMaxOutLen];
-  size_t outlen = 0;
-  uint32_t delta_size;
-  outlen = gencode((uint8_t *)input, input_len, (uint8_t *)base,
-                   (uint32_t)base_len, (uint8_t *)buff, &delta_size);
-  *output = string(buff, buff + outlen);
+  uint32_t outlen = 0;
+  gencode((uint8_t *)input, input_len, (uint8_t *)base, (uint32_t)base_len,
+          (uint8_t **)&buff, &outlen);
+  output->assign(buff, buff + outlen);
   delete[] buff;
   return true; // TODO(haitao) 需要看一下到底是不是 == 0，大概率是的
 #else
@@ -300,8 +301,9 @@ bool GDelta_Compress(const char *input, size_t input_len, const char *base,
 bool GDelta_Uncompress(const char *delta, size_t delta_len, const char *base,
                        size_t base_len, char *output, uint32_t *outlen) {
 #ifdef GDELTA_GDELTA_H // TODO(haitao)
-  return gdecode((uint8_t *)delta, delta_len, (uint8_t *)base,
-                 (uint32_t)base_len, (uint8_t *)output, outlen) == 0;
+  gdecode((uint8_t *)delta, delta_len, (uint8_t *)base, (uint32_t)base_len,
+          (uint8_t **)&output, outlen);
+  return true;
 #else
   (void)input;
   (void)length;
@@ -326,88 +328,93 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
 
   uint32_t original_length = input.size();
   PutVarint32(output, original_length);
+  bool ok = false;
 
   string compressed;
   switch (type) {
-  case kXDelta:
+  case kXDelta: {
     if (XDelta_Compress(input.data(), input.size(), base.data(), base.size(),
                         &compressed) &&
         GoodCompressionRatio(compressed.size(), input.size())) {
-      output->append(compressed);
-      return true;
+      ok = true;
     }
     break;
-  case kEDelta:
+  }
+  case kEDelta: {
     if (EDelta_Compress(input.data(), input.size(), base.data(), base.size(),
                         &compressed) &&
         GoodCompressionRatio(compressed.size(), input.size())) {
-      output->append(compressed);
-      return true;
+      ok = true;
     }
     break;
-  case kGDelta:
+  }
+  case kGDelta: {
     if (GDelta_Compress(input.data(), input.size(), base.data(), base.size(),
                         &compressed) &&
         GoodCompressionRatio(compressed.size(), input.size())) {
-      output->append(compressed);
-      return true;
+      ok = true;
     }
     break;
+  }
   default: {
   } // Do not recognize this compression type
   }
 
-  // TODO(haitao) 写个log
-  return false;
+  if (ok)
+    output->append(compressed);
+
+  return ok;
 }
 
-Status DeltaUncompress(DeltaCompressType type, Slice delta, Slice base,
-                       OwnedSlice *output) {
-  int size = 0;
+Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
+                       const Slice &base, OwnedSlice *output) {
+  if (delta.empty() || base.empty())
+    return Status::Corruption("Delta Uncompress Failed", "Delta or base empty");
   CacheAllocationPtr ubuf;
   uint32_t original_length;
+  Slice delta_copy(delta);
 
-  if (!GetVarint32(&delta, &original_length)) {
+  if (!GetVarint32(&delta_copy, &original_length)) {
     return Status::Corruption("Currupted delta compression", "original_length");
   }
 
   ubuf.reset(new char[original_length]);
-  size_t decompressed_length;
+  size_t output_length;
   assert(type != kNoDeltaCompression);
 
   switch (type) {
   case kXDelta: {
-    if (!XDelta_Uncompress(delta.data(), delta.size(), base.data(),
-                           base.size(), ubuf.get(), &decompressed_length,
+    if (!XDelta_Uncompress(delta_copy.data(), delta_copy.size(), base.data(),
+                           base.size(), ubuf.get(), &output_length,
                            original_length)) {
       return Status::Corruption("Corrupted compressed blob", "XDelta");
     }
-    output->reset(std::move(ubuf), size);
+    output->reset(std::move(ubuf), output_length);
     break;
   }
   case kEDelta:
     if (!EDelta_Uncompress(delta.data(), delta.size(), base.data(),
                            base.size(), ubuf.get(),
-                           (uint32_t *)&decompressed_length)) {
+                           (uint32_t *)&output_length)) {
       return Status::Corruption("Corrupted compressed blob", "EDelta");
     }
-    output->reset(std::move(ubuf), size);
+    output->reset(std::move(ubuf), output_length);
     break;
   case kGDelta:
     if (!GDelta_Uncompress(delta.data(), delta.size(), base.data(),
                            base.size(), ubuf.get(),
-                           (uint32_t *)&decompressed_length)) {
+                           (uint32_t *)&output_length)) {
       return Status::Corruption("Corrupted compressed blob", "GDelta");
     }
-    output->reset(std::move(ubuf), size);
+    output->reset(std::move(ubuf), output_length);
     break;
   default:
     return Status::Corruption("bad delta compression type");
   }
 
-  if (decompressed_length != original_length)
+  if (output_length != original_length)
     return Status::Corruption("Delta Compression corrupted",
-                              "length"); // TODO 换个好名字
+                              "output_length != original_length");
 
   return Status::OK();
 }
