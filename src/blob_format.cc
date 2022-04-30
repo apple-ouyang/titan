@@ -72,20 +72,20 @@ size_t DeltaRecords::size() const {
 }
 
 template <typename BlobType>
-void BlobEncoder::EncodeRecord(const BlobType &record){
+void BlobEncoder::EncodeRecordTemplate(const BlobType &record){
   record_buffer_.clear();
   record.EncodeTo(&record_buffer_);
   CompressAndEncodeHeader(record_buffer_);
 }
 
-void BlobEncoder::EncodeBlobRecord(const BlobRecord &record){
+void BlobEncoder::EncodeRecord(const BlobRecord &record){
   SetIsDeltaCompressed(false);
-  EncodeRecord<BlobRecord>(record);
+  EncodeRecordTemplate<BlobRecord>(record);
 }
 
 void BlobEncoder::EncodeDeltaRecords(const DeltaRecords &records){
   SetIsDeltaCompressed(true);
-  EncodeRecord<DeltaRecords>(records);
+  EncodeRecordTemplate<DeltaRecords>(records);
 }
 
 void BlobEncoder::CompressAndEncodeHeader(const Slice& record) {
@@ -122,7 +122,7 @@ Status BlobDecoder::DecodeHeader(Slice* src) {
 
   compression_ = static_cast<CompressionType>(compression);
   delta_compression_ = static_cast<DeltaCompressType>(delta_compression);
-  is_delta_records_ = delta_compression != kNoCompression ? true : false;
+  is_delta_records_ = delta_compression != kNoDeltaCompression;
   return Status::OK();
 }
 
@@ -135,9 +135,6 @@ Status BlobDecoder::CheckRecordCrc(const Slice &src){
 }
 
 Status BlobDecoder::UncompressRecordIntoBuffer(const Slice &src, OwnedSlice* buffer){
-  if(compression_ == kNoCompression)
-    return Status::OK();
-
   UncompressionContext ctx(compression_);
   UncompressionInfo info(ctx, *uncompression_dict_, compression_);
   Status s = Uncompress(info, src, buffer);
@@ -156,6 +153,10 @@ Status BlobDecoder::DecodeRecord(Slice *src, RecordType *record,
   if(!s.ok())
     return s;
 
+  if (compression_ == kNoCompression) {
+    return DecodeInto(input, record);
+  }
+  
   s = UncompressRecordIntoBuffer(input, buffer);
   if(!s.ok())
     return s;

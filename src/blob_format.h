@@ -190,8 +190,8 @@ public:
       : BlobEncoder(compression, compression_opt,
                     &CompressionDict::GetEmptyDict(), delta_compression) {}
 
-  template <typename BlobType> void EncodeRecord(const BlobType &record);
-  void EncodeBlobRecord(const BlobRecord &record);
+  template <typename BlobType> void EncodeRecordTemplate(const BlobType &record);
+  void EncodeRecord(const BlobRecord &record);
   void EncodeDeltaRecords(const DeltaRecords &records);
   void CompressAndEncodeHeader(const Slice &record);
   

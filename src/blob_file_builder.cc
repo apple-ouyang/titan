@@ -63,13 +63,13 @@ void BlobFileBuilder::Add(const BlobType &record,
         sample_str_len_ >=
             cf_options_.blob_file_compression_options.zstd_max_train_bytes) {
       EnterUnbuffered(out_ctx);
-    } else {
-      encoder_.EncodeRecord(record);
-      WriteEncoderData(&ctx->new_blob_index.blob_handle);
-      if (ctx->is_delta_compressed)
-        ctx->WriteDeltaIndexsContexts(out_ctx);
-      out_ctx->emplace_back(std::move(ctx));
     }
+  } else {
+    encoder_.EncodeRecord(record);
+    WriteEncoderData(&ctx->new_blob_index.blob_handle);
+    if (ctx->is_delta_compressed)
+      ctx->WriteDeltaIndexsContexts(out_ctx);
+    out_ctx->emplace_back(std::move(ctx));
   }
 }
 
@@ -77,7 +77,7 @@ void BlobFileBuilder::Add(const BlobRecord &record,
                           std::unique_ptr<BlobRecordContext> ctx,
                           OutContexts *out_ctx){
   Add<BlobRecord>(record, move(ctx), out_ctx);
-  UpdateKeyRange(record.key.ToString());                         
+  UpdateKeyRange(record.key.ToString());
 }
 
 void BlobFileBuilder::Add(const DeltaRecords &records,
