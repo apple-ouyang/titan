@@ -228,9 +228,9 @@ inline bool BlobGCJob::IsBlobFileHitLimit(
 }
 
 bool BlobGCJob::IsNeedNewBlobFile(const std::unique_ptr<BlobFileHandle> &blob_file_handle, const std::unique_ptr<BlobFileBuilder> &blob_file_builder){
-  if (blob_file_handle == nullptr || blob_file_builder == nullptr)
+  if (!blob_file_handle && !blob_file_builder)
     return true;
-  else if (IsBlobFileHitLimit(blob_file_handle))
+  else if (!blob_file_handle && IsBlobFileHitLimit(blob_file_handle))
     return true;
   return false;
 }
@@ -413,11 +413,14 @@ Status BlobGCJob::DoRunGC() {
   }
 
   if (gc_iter->status().ok() && s.ok()) {
-    assert(blob_file_builder);
-    assert(blob_file_handle);
-    assert(blob_file_builder->status().ok());
-    blob_file_builders_.emplace_back(std::make_pair(
-        std::move(blob_file_handle), std::move(blob_file_builder)));
+    if (blob_file_builder && blob_file_handle) {
+      assert(blob_file_builder->status().ok());
+      blob_file_builders_.emplace_back(std::make_pair(
+          std::move(blob_file_handle), std::move(blob_file_builder)));
+    } else {
+      assert(!blob_file_builder);
+      assert(!blob_file_handle);
+    }
   } else if (!gc_iter->status().ok()) {
     return gc_iter->status();
   }

@@ -630,13 +630,7 @@ Status TitanDBImpl::Flush(const rocksdb::FlushOptions& options,
 
 Status TitanDBImpl::Get(const ReadOptions& options, ColumnFamilyHandle* handle,
                         const Slice& key, PinnableSlice* value) {
-  if (options.snapshot) {
-    return GetImpl(options, handle, key, value);
-  }
-  ReadOptions ro(options);
-  ManagedSnapshot snapshot(this);
-  ro.snapshot = snapshot.snapshot();
-  return GetImpl(ro, handle, key, value);
+  return Get(options, handle, key, value, nullptr);
 }
 
 Status TitanDBImpl::Get(const ReadOptions& options, ColumnFamilyHandle* handle,
@@ -655,7 +649,6 @@ Status TitanDBImpl::GetImpl(const ReadOptions& options,
                             PinnableSlice* value, BlobIndex *return_index) {
   Status s;
   bool is_blob_index = false;
-  // TODO(haitao) 确认差量压缩后调用 RocksDB 的 Get 之后，不会影响 is_blob_index
   s = db_impl_->GetImpl(options, handle, key, value, nullptr /*value_found*/,
                         nullptr /*read_callback*/, &is_blob_index);
   if (!s.ok() || !is_blob_index) return s;

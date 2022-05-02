@@ -157,7 +157,7 @@ public:
     printf("\n##################################################\n");
     cout << total_records_ << " records have been put into titan databse!\n";
     cout << put_key_value_size_ << " are the size of keys and values\n";
-    printf("%6zu (%.2f%%) is the number of similar records that can be delta "
+    printf("%zu (%.2f%%) is the number of similar records that can be delta "
            "compressed\n",
            max_similar_records_,
            (double)max_similar_records_ / total_records_ * 100);
@@ -498,7 +498,7 @@ public:
           "---------------- | -------------------- | ------------- | "
           "------------- | ------------------- | ----------------------- |\n");
       printf("| %s\t | %zu\t | %zu\t | %s\t | %s\t | %.2f\t | "
-             "%.2fs\t |  %s\t | %s\t | %.2f\t |",
+             "%.2fs\t |  %s\t | %s\t | %.2f\t |\n",
              method.c_str(), fail_number, compressed_number,
              delta_before_size.ToString(false).c_str(),
              delta_after_size.ToString(false).c_str(), delta_ratio, time,

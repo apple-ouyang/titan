@@ -8,7 +8,7 @@ set(GDELTA ${PROJECT_SOURCE_DIR}/third-party/gdelta/)
 set(XDELTA ${PROJECT_SOURCE_DIR}/third-party/xdelta/xdelta3)
 set(EDELTA ${PROJECT_SOURCE_DIR}/third-party/edelta)
 
-add_compile_options(-g -Wno-error)
+add_compile_options(-g)
 
 if (NOT ROCKSDB_GIT_REPO)
   set(ROCKSDB_GIT_REPO "https://github.com/tikv/rocksdb.git")

@@ -87,7 +87,7 @@ class TitanDBImpl : public TitanDB {
   Status Get(const ReadOptions& options, ColumnFamilyHandle* handle,
              const Slice& key, PinnableSlice* value) override;
 
-  // TODO(haitao) 怕影响 override 所以没有动上面这个原型。动了到底会不会影响呢？
+  // Get value and blob index of the key
   Status Get(const ReadOptions& options, ColumnFamilyHandle* handle,
              const Slice& key, PinnableSlice* value, BlobIndex* return_index);
 

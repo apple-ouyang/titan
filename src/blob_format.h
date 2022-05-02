@@ -44,8 +44,8 @@ const uint64_t kRecordHeaderSize = 10;
 const uint64_t kBlobFooterSize = BlockHandle::kMaxEncodedLength + 8 + 4;
 
 enum BlobType : uint8_t {
-  kBlobRecord = 0b00,
-  kDeltaRecords = 0b01
+  kBlobRecord = 1,
+  kDeltaRecords = 2
 }; 
 
 // Format of blob record (not fixed size):
