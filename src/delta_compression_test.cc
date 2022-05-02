@@ -373,7 +373,7 @@ public:
     ASSERT_TRUE(s.ok());
   }
 
-  DeltaCompressionTest() : DataReader(100), dbname_(test::TmpDir()) {
+  DeltaCompressionTest() : DataReader(), dbname_(test::TmpDir()) {
     options_.dirname = dbname_ + "/titandb";
     options_.create_if_missing = true;
     options_.disable_background_gc = true;
@@ -641,17 +641,25 @@ private:
   FeatureIndexTable table_;
 };
 
+TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
+TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
+TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
+TEST_P(DeltaCompressionTest, StackOverFlowComment) {
+  TestStackOverFlowComment();
+}
+
+INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+                        ::testing::Values(kGDelta, kXDelta, kEDelta));
+
+// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
+// DeltaCompressionTest,
+//                         ::testing::Values(kGDelta));
+
+
 // TEST_P(ResemblenceDetectionTest, Wikipedia) { TestWikipedia(); }
 // TEST_P(ResemblenceDetectionTest, EnronMail) { TestEnronMail(); }
 // TEST_P(ResemblenceDetectionTest, StackOverFlow) { TestStackOverFlow(); }
 // TEST_P(ResemblenceDetectionTest, StackOverFlowComment) {
-//   TestStackOverFlowComment();
-// }
-
-// TEST_P(DeltaCompressionTest, Wikipedia) { TestWikipedia(); }
-TEST_P(DeltaCompressionTest, EnronMail) { TestEnronMail(); }
-// TEST_P(DeltaCompressionTest, StackOverFlow) { TestStackOverFlow(); }
-// TEST_P(DeltaCompressionTest, StackOverFlowComment) {
 //   TestStackOverFlowComment();
 // }
 
@@ -663,13 +671,6 @@ typedef tuple<feature_t, size_t, size_t> TableParameters;
 //                       TableParameters(k1_4RatioMask, 12, 3)
 //                       TableParameters(k1_4RatioMask, 12, 12)
 //                       ));
-
-INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
-                        ::testing::Values(kGDelta, kXDelta, kEDelta));
-
-// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
-// DeltaCompressionTest,
-//                         ::testing::Values(kGDelta));
 
 } // namespace titandb
 } // namespace rocksdb

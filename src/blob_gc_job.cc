@@ -298,10 +298,9 @@ Status BlobGCJob::DoRunGC() {
         blob_gc_->titan_cf_options().blob_file_delta_compression;
     BlobRecord blob_record;
     DeltaRecords delta_records;
-    BlobRecord base_record;
     if(is_delta_records){
       delta_records = gc_iter->GetDeltaRecords();
-      base_record = delta_records;
+      blob_record = delta_records;
     }
     else
       blob_record = gc_iter->GetBlobRecord();
@@ -359,8 +358,7 @@ Status BlobGCJob::DoRunGC() {
     // internal key in spite we only need the user key.
     std::unique_ptr<BlobFileBuilder::BlobRecordContext> ctx(
         new BlobFileBuilder::BlobRecordContext);
-    InternalKey ikey(is_delta_records ? base_record.key : blob_record.key, 1,
-                     kTypeValue);
+    InternalKey ikey(blob_record.key, 1, kTypeValue);
     ctx->key = ikey.Encode().ToString();
     ctx->original_blob_index = blob_index;
     ctx->new_blob_index.file_number = blob_file_handle->GetNumber();
@@ -374,7 +372,7 @@ Status BlobGCJob::DoRunGC() {
       feature_index_table.GetSimilarRecordsKeys(blob_record.key, similar_keys);
       if (similar_keys.size() > 0) {
         vector<BlobIndex> deltas_indexes;
-        s = DeltaCompressRecords(base_record.value, similar_keys, deltas_keys,
+        s = DeltaCompressRecords(blob_record.value, similar_keys, deltas_keys,
                                  deltas_values, deltas_indexes);
         if(!s.ok())
           break;
