@@ -154,14 +154,15 @@ public:
   virtual void GetSimilarRecords() = 0;
 
   void PrintFinishInfo() {
-    printf("\n##################################################\n");
+    printf("\n\n");
+    printf("##################################################\n");
     cout << total_records_ << " records have been put into titan databse!\n";
     cout << put_key_value_size_ << " are the size of keys and values\n";
     printf("%zu (%.2f%%) is the number of similar records that can be delta "
            "compressed\n",
            max_similar_records_,
            (double)max_similar_records_ / total_records_ * 100);
-    printf("##################################################\n\n");
+    printf("##################################################\n");
     fflush(stdout);
   }
 
@@ -382,9 +383,8 @@ public:
     options_.env->CreateDirIfMissing(dbname_);
     options_.env->CreateDirIfMissing(options_.dirname);
     options_.blob_file_delta_compression = GetParam();
-
-    // gc all blobs no mater How many garbage data they have
-    options_.blob_file_discardable_ratio = -0.1;
+    options_.min_gc_batch_size = 0;
+    options_.statistics = CreateDBStatistics();
   }
 
   ~DeltaCompressionTest() { Close(); }
@@ -442,6 +442,7 @@ public:
   struct Statistics {
     uint64_t gc_number = 0;
     uint64_t compressed_number = 0;
+    uint64_t gc_files = 0;
     HumanReadable delta_before_size{};
     HumanReadable delta_after_size{};
     string method = "unknown";
@@ -449,6 +450,8 @@ public:
     uint64_t fail_number = 0;
     HumanReadable database_before_size{};
     HumanReadable database_after_size{};
+    HumanReadable blob_files_size{};
+    HumanReadable blob_files_after_size{};
 
     void AddTimespec(timespec &time, const timespec &addtime) {
       time.tv_sec += addtime.tv_sec;
@@ -465,6 +468,7 @@ public:
 
     void Update(const BlobGCJob::Metrics &metrics) {
       gc_number += metrics.gc_num_processed_records;
+      gc_files += metrics.gc_num_files;
       delta_before_size.size_ += metrics.gc_before_delta_compressed_size;
       delta_after_size.size_ += metrics.gc_after_delta_compressed_size;
       compressed_number += metrics.gc_delta_compressed_record;
@@ -488,38 +492,52 @@ public:
       double database_ratio =
           (double)database_before_size.size_ / database_after_size.size_;
       double time = TimespecToSeconds(compressed_time);
+      double blob_file_ratio =
+          (double)blob_files_size.size_ / blob_files_after_size.size_;
       putchar('\n');
       printf(
           "| method  | compress fail | compress success | delta size | delta "
-          "after size | delta compress ratio | compress time | database size | "
-          "database after size | database compress ratio |\n");
+          "after size | delta compress ratio | compress time |\n");
       printf(
           "| ------- | ------------- | ---------------- | ---------- | "
-          "---------------- | -------------------- | ------------- | "
-          "------------- | ------------------- | ----------------------- |\n");
+          "---------------- | -------------------- | ------------- |\n");
       printf("| %s\t | %zu\t | %zu\t | %s\t | %s\t | %.2f\t | "
-             "%.2fs\t |  %s\t | %s\t | %.2f\t |\n",
+             "%.2fs\t |\n",
              method.c_str(), fail_number, compressed_number,
              delta_before_size.ToString(false).c_str(),
-             delta_after_size.ToString(false).c_str(), delta_ratio, time,
-             database_before_size.ToString(false).c_str(),
-             database_after_size.ToString(false).c_str(), database_ratio);
+             delta_after_size.ToString(false).c_str(), delta_ratio, time);
+      putchar('\n');
+      printf("| method  | database size | database after size | database "
+             "compress ratio | blob files size | blob files after size | blob "
+             "file compress ratio |\n");
+      printf("| ------- | ------------- | ------------------- | "
+             "----------------------- | ----------------------- | "
+             "----------------------- | ----------------------- |\n");
+      printf("| %s\t | %s\t | %s\t | %.2f\t |  %s\t | %s\t | %.2f\t |\n",
+             method.c_str(), database_before_size.ToString(false).c_str(),
+             database_after_size.ToString(false).c_str(), database_ratio,
+             blob_files_size.ToString(false).c_str(),
+             blob_files_after_size.ToString(false).c_str(), blob_file_ratio);
+
       fflush(stdout);
     }
   };
 
-  bool IsKeepGC(uint64_t gc_processed_records) {
-    double gc_ratio = (double)gc_processed_records / total_records_;
-    printf("GC complete %.2f%%\n", gc_ratio * 100);
-    fflush(stdout);
-    return gc_ratio < 0.9;
+  void PrintProcedure(const size_t gc_files, const size_t number_of_files) {
+    double ratio = (double)gc_files / number_of_files;
+    printf("\r%.2f%% GC complete\n", ratio * 100);
   }
 
   // TODO unifiy this and TitanDBImpl::TEST_StartGC
-  void RunGC() {
-    Statistics statistics;
-    statistics.database_before_size.size_ = GetDatabaseSize(dbname_);
-    cout << "Start garbage collection!" << endl;
+  void GCAllFiles() {
+    Statistics stats;
+    stats.database_before_size.size_ = GetDatabaseSize(dbname_);
+    bool ok;
+    ok = db_->GetIntProperty(TitanDB::Properties::kLiveBlobFileSize,
+                             &stats.blob_files_size.size_);
+    ASSERT_TRUE(ok);
+    cout << "Start garbage collection! \nPlease wait several minutes..."
+         << endl;
     MutexLock l(mutex_);
     Status s;
     auto *cfh = base_db_->DefaultColumnFamily();
@@ -528,6 +546,15 @@ public:
     TitanDBOptions db_options = options_;
     TitanCFOptions cf_options = options_;
     LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL, db_options.info_log.get());
+
+    size_t number_of_files;
+    {
+      auto blob_storage =
+          blob_file_set_->GetBlobStorage(cfh->GetID()).lock().get();
+      blob_storage->SetAllFilesLiveDataTo0();
+      blob_storage->ComputeGCScore();
+      number_of_files = blob_storage->gc_score().size();
+    }
 
     unique_ptr<BlobGC> blob_gc;
     do {
@@ -561,18 +588,21 @@ public:
           ASSERT_OK(s);
         }
         blob_gc->ReleaseGcFiles();
-        statistics.Update(blob_gc_job.metrics_);
+        stats.Update(blob_gc_job.metrics_);
       }
 
       mutex_->Unlock();
       tdb_->PurgeObsoleteFiles();
       mutex_->Lock();
-    } while (blob_gc != nullptr && blob_gc->trigger_next() &&
-             IsKeepGC(statistics.gc_number));
+      PrintProcedure(stats.gc_files, number_of_files);
+    } while (stats.gc_files < number_of_files);
     // } while (blob_gc != nullptr && blob_gc->trigger_next());
-    statistics.GetTypeString(options_.blob_file_delta_compression);
-    statistics.database_after_size.size_ = GetDatabaseSize(dbname_);
-    statistics.Print();
+    stats.GetTypeString(options_.blob_file_delta_compression);
+    stats.database_after_size.size_ = GetDatabaseSize(dbname_);
+    ok = db_->GetIntProperty(TitanDB::Properties::kLiveBlobFileSize,
+                             &stats.blob_files_after_size.size_);
+    ASSERT_TRUE(ok);
+    stats.Print();
   }
 
   void ExecutePut(const string &key, const string &value) override {
@@ -588,28 +618,28 @@ public:
     NewDB();
     PutWikipediaData();
     Flush();
-    RunGC();
+    GCAllFiles();
   }
 
   void TestEnronMail() {
     NewDB();
     PutEnronMailData();
     Flush();
-    RunGC();
+    GCAllFiles();
   }
 
   void TestStackOverFlow() {
     NewDB();
     PutStackOverFlowData();
     Flush();
-    RunGC();
+    GCAllFiles();
   }
 
   void TestStackOverFlowComment() {
     NewDB();
     PutStackOverFlowCommentData();
     Flush();
-    RunGC();
+    GCAllFiles();
   }
 };
 
@@ -654,7 +684,6 @@ INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
 // INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
 // DeltaCompressionTest,
 //                         ::testing::Values(kGDelta));
-
 
 // TEST_P(ResemblenceDetectionTest, Wikipedia) { TestWikipedia(); }
 // TEST_P(ResemblenceDetectionTest, EnronMail) { TestEnronMail(); }

@@ -117,7 +117,9 @@ Status BlobGCJob::DeltaCompressRecords(const Slice &base,
         return s;
     }
 
-    // TODO(haitao) 写个log
+    // Once the record are delta compressed no matter it is compressed as base
+    // or delta, he feature of the record will be deleted from the
+    // feature_index_table So the type of the record's index won't be kDeltaRecords
     assert(index.type != BlobType::kDeltaRecords);
     struct timespec start, stop;
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -206,20 +208,6 @@ Status BlobGCJob::Run() {
                    tmp.c_str());
   return DoRunGC();
 }
-
-// Status DeltaCompressBlobRecord(const BlobRecord &record, DeltaCompressType type,
-//                              DeltaRecords &res) {
-//   vector<string> similar_keys;
-//   feature_index_table.GetSimilarRecordsKeys(record.key, similar_keys);
-//   if (similar_keys.size() > 0) {
-//     Status s = DeltaCompressRecords(record.value, similar_keys, deltas_keys,
-//                              deltas_values, delta_indexes);
-//     if (!s.ok())
-//       return s;
-//     delta_compressed_records.AddDeltaCompressedKeys(deltas_keys);
-//     metrics_.gc_num_processed_records += deltas_keys.size();
-//   }
-// }
 
 inline bool BlobGCJob::IsBlobFileHitLimit(
     const std::unique_ptr<BlobFileHandle> &blob_file_handle) {
@@ -320,13 +308,15 @@ Status BlobGCJob::DoRunGC() {
     }
 
     bool is_discard = false;
-    if (is_delta_records)
-      s = IsDiscardDeltaRecords(delta_records, blob_index, &is_discard);
-    else{
-      if (delta_compress_type != kNoDeltaCompression)
-        s = IsDiscardBlobRecord(blob_record.key, blob_index, &is_discard, &have_delta_compressed);
-      else
+    if (!is_delta_records) {
+      if (delta_compress_type == kNoDeltaCompression) {
         s = IsDiscardBlobRecord(blob_record.key, blob_index, &is_discard);
+      } else {
+        s = IsDiscardBlobRecord(blob_record.key, blob_index, &is_discard,
+                                &have_delta_compressed);
+      }
+    } else {
+      s = IsDiscardDeltaRecords(delta_records, blob_index, &is_discard);
     }
       
     if (!s.ok()) {
@@ -542,7 +532,7 @@ BlobGCJob::IsDiscardBlobRecord(const Slice &key, const BlobIndex &index,
     return s;
 
   // Delta compressed may already compress this record in the previous GC.
-  // So we can just discard thoese that are already delta compressed.
+  // So we can just discard this.
   if (have_delta_compressed != nullptr && *is_discard == false) {
     *is_discard = have_delta_compressed->IsDiscard(key.ToString());
   }

@@ -91,6 +91,9 @@ class BlobStorage {
     return destroyed_ && obsolete_files_.empty();
   }
 
+  // Used to GC all files, so we can delta compress all files.
+  void SetAllFilesLiveDataTo0();
+
   // Computes GC score.
   void ComputeGCScore();
 

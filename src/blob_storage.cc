@@ -2,6 +2,7 @@
 
 #include "blob_file_set.h"
 #include "titan_logging.h"
+#include "util/mutexlock.h"
 
 namespace rocksdb {
 namespace titandb {
@@ -196,6 +197,13 @@ void BlobStorage::GetAllFiles(std::vector<std::string>* files) {
     uint64_t file_number = file.first;
     // relative to dirname
     files->emplace_back(BlobFileName("", file_number));
+  }
+}
+
+void BlobStorage::SetAllFilesLiveDataTo0() {
+  MutexLock l(&mutex_);
+  for (auto& file : files_){
+    file.second->set_live_data_size(0);
   }
 }
 

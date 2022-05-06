@@ -5,6 +5,7 @@
 #include "rocksdb/write_batch_base.h"
 #include "titan/options.h"
 #include "util.h"
+#include "util/mutexlock.h"
 #include "util/xxhash.h"
 
 #include <cstdint>
@@ -105,12 +106,12 @@ public:
   void Put(const Slice &key, const Slice &value);
 
   // Delete (key, feature_number of super feature) pair and
-  // feature_number of (super feature,key) pairs
-  inline void Delete(const Slice &key) { Delete(key.ToString()); }
+  // feature_number of (super feature, key) pairs
+  void Delete(const string &key);
 
   void RangeDelete(const Slice &start, const Slice &end);
 
-  Status Write(WriteBatch *updates);
+  // Status Write(WriteBatch *updates);
 
   // Use key to find all similar records by searching the key-feature table.
   // After that, remove key from the key-feature table
@@ -120,28 +121,27 @@ public:
   size_t CountAllSimilarRecords() const;
 
 private:
+  mutable port::Mutex mutex_;
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;
   map<string, SuperFeatures> key_feature_table_;
   FeatureGenerator feature_generator_;
-
-  void Delete(const string &key);
 
   void ExecuteDelete(const string &key, const SuperFeatures &super_features);
 
   bool GetSuperFeatures(const string &key, SuperFeatures *super_features);
 };
 
-class FeatureHandle : public WriteBatch::Handler, public FeatureIndexTable {
-public:
-  // using FeatureIndexTable::Put
-  virtual void Put(const Slice &key, const Slice &value) override {
-    FeatureIndexTable::Put(key, value);
-  }
+// class FeatureHandle : public WriteBatch::Handler, public FeatureIndexTable {
+// public:
+//   // using FeatureIndexTable::Put
+//   virtual void Put(const Slice &key, const Slice &value) override {
+//     FeatureIndexTable::Put(key, value);
+//   }
 
-  virtual void Delete(const Slice &key) override {
-    FeatureIndexTable::Delete(key);
-  }
-};
+//   virtual void Delete(const Slice &key) override {
+//     FeatureIndexTable::Delete(key);
+//   }
+// };
 
 // Returns true if:
 // (1) the compression method is supported in this platform and

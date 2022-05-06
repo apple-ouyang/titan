@@ -3,6 +3,7 @@
 #include "gdelta.h"
 #include "gear-matrix.h"
 #include "util/coding.h"
+#include "util/mutexlock.h"
 #include "util/xxhash.h"
 #include "xdelta3.h"
 #include <bits/types/struct_timespec.h>
@@ -19,6 +20,7 @@ namespace titandb {
 FeatureIndexTable feature_index_table;
 
 void FeatureIndexTable::Delete(const string &key) {
+  MutexLock l(&mutex_);
   SuperFeatures super_features;
   if (GetSuperFeatures(key, &super_features)) {
     ExecuteDelete(key, super_features);
@@ -34,6 +36,7 @@ void FeatureIndexTable::ExecuteDelete(const string &key,
 }
 
 void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
+  MutexLock l(&mutex_);
   auto it_start = key_feature_table_.find(start.ToString());
   auto it_end = key_feature_table_.find(end.ToString());
   for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
@@ -53,19 +56,23 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
   Delete(k);
 
   super_features = feature_generator_.GenerateSuperFeatures(value);
-  key_feature_table_[k] = super_features;
-  for (const super_feature_t &sf : super_features) {
-    feature_key_table_[sf].insert(k);
+
+  {
+    MutexLock l(&mutex_);
+    key_feature_table_[k] = super_features;
+    for (const super_feature_t &sf : super_features) {
+      feature_key_table_[sf].insert(k);
+    }
   }
 }
 
-Status FeatureIndexTable::Write(WriteBatch *updates) {
-  // TODO(haitao) 确定可以吗？可以写batch？
-  // TODO(haitao)
-  // 会不会被其他函数调用过导致重复写index？比如Put、Delte调用write？
-  FeatureHandle hd;
-  return updates->Iterate(&hd);
-}
+// Status FeatureIndexTable::Write(WriteBatch *updates) {
+//   // TODO(haitao) 确定可以吗？可以写batch？
+//   // TODO(haitao)
+//   // 会不会被其他函数调用过导致重复写index？比如Put、Delte调用write？
+//   FeatureHandle hd;
+//   return updates->Iterate(&hd);
+// }
 
 bool FeatureIndexTable::GetSuperFeatures(const string &key,
                                          SuperFeatures *super_features) {
@@ -79,13 +86,14 @@ bool FeatureIndexTable::GetSuperFeatures(const string &key,
 }
 
 size_t FeatureIndexTable::CountAllSimilarRecords() const {
+  MutexLock l(&mutex_);
   size_t num = 0;
   unordered_set<string> similar_keys;
   for (auto it : feature_key_table_) {
     auto keys = it.second;
 
     // If there are more than one records have the same feature,
-    // thoese keys are considered similar
+    // thoese Values corresponding to the keys are considered similar
     if (keys.size() > 1) {
       for (const string &key : keys)
         similar_keys.emplace(move(key));
@@ -96,16 +104,21 @@ size_t FeatureIndexTable::CountAllSimilarRecords() const {
 
 void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
                                               vector<string> &similar_keys) {
+
   SuperFeatures super_features;
   const string k = key.ToString();
-  if (!GetSuperFeatures(k, &super_features)) {
-    return;
-  }
+  
+  {
+    MutexLock l(&mutex_);
+    if (!GetSuperFeatures(k, &super_features)) {
+      return;
+    }
 
-  for (const super_feature_t &sf : super_features) {
-    for (string similar_key : feature_key_table_[sf]) {
-      if (similar_key != k) {
-        similar_keys.emplace_back(move(similar_key));
+    for (const super_feature_t &sf : super_features) {
+      for (string similar_key : feature_key_table_[sf]) {
+        if (similar_key != k) {
+          similar_keys.emplace_back(move(similar_key));
+        }
       }
     }
   }
@@ -113,7 +126,7 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
   for (const string &similar_key : similar_keys) {
     Delete(similar_key);
   }
-  ExecuteDelete(k, super_features);
+  Delete(k);
 }
 
 FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
@@ -393,17 +406,15 @@ Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
     break;
   }
   case kEDelta:
-    if (!EDelta_Uncompress(delta.data(), delta.size(), base.data(),
-                           base.size(), ubuf.get(),
-                           (uint32_t *)&output_length)) {
+    if (!EDelta_Uncompress(delta.data(), delta.size(), base.data(), base.size(),
+                           ubuf.get(), (uint32_t *)&output_length)) {
       return Status::Corruption("Corrupted compressed blob", "EDelta");
     }
     output->reset(std::move(ubuf), output_length);
     break;
   case kGDelta:
-    if (!GDelta_Uncompress(delta.data(), delta.size(), base.data(),
-                           base.size(), ubuf.get(),
-                           (uint32_t *)&output_length)) {
+    if (!GDelta_Uncompress(delta.data(), delta.size(), base.data(), base.size(),
+                           ubuf.get(), (uint32_t *)&output_length)) {
       return Status::Corruption("Corrupted compressed blob", "GDelta");
     }
     output->reset(std::move(ubuf), output_length);
