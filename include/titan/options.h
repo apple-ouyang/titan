@@ -4,25 +4,10 @@
 #include <unordered_map>
 
 #include "rocksdb/options.h"
+#include "delta_compression.h"
 
 namespace rocksdb {
 namespace titandb {
-
-// Similar records can be delta compressed.
-// It needs two records to compress, a base record, and a record to be
-// compressed to delta. The delta is based on the baes record, using COPY ADD
-// method to show the difference between the delta and base
-// speed:               edelta > gdelta > xdelta
-// compression ratio:   gdelta > xdelta > edelta
-// default:             kNoDeltaCompression
-// recommend:           kGdelta
-enum DeltaCompressType : uint8_t {
-  kNoDeltaCompression = 0,
-  kXDelta = 1, // traditional delta compression algorithm
-  kEDelta = 2, // fastest but also low compression ratio
-  kGDelta = 3  // faster and higher compression ratio than Xdelta
-};
-  
 struct TitanDBOptions : public DBOptions {
   // The directory to store data specific to TitanDB alongside with
   // the base DB.
@@ -111,6 +96,14 @@ struct TitanCFOptions : public ColumnFamilyOptions {
   // blob file is compressed. We use this options mainly to configure the
   // compression dictionary.
   CompressionOptions blob_file_compression_options;
+
+  // When delta blob_file_delta_compression is not kNoDeltaCompression
+  // this will be initialized to point to a feature index table.
+  // This table will store every record's feature to help find similar 
+  // records. Similar records are delta compressed during GC.
+  //
+  // Default: nullptr
+  std::shared_ptr<FeatureIndexTable> feature_index_table;
 
   // The desirable blob file size. This is not a hard limit but a wish.
   //
@@ -219,6 +212,7 @@ struct ImmutableTitanCFOptions {
       : min_blob_size(opts.min_blob_size),
         blob_file_compression(opts.blob_file_compression),
         blob_file_delta_compression(opts.blob_file_delta_compression),
+        feature_index_table(opts.feature_index_table),
         blob_file_target_size(opts.blob_file_target_size),
         blob_cache(opts.blob_cache),
         max_gc_batch_size(opts.max_gc_batch_size),
@@ -227,13 +221,19 @@ struct ImmutableTitanCFOptions {
         sample_file_size_ratio(opts.sample_file_size_ratio),
         merge_small_file_threshold(opts.merge_small_file_threshold),
         level_merge(opts.level_merge),
-        skip_value_in_compaction_filter(opts.skip_value_in_compaction_filter) {}
+        skip_value_in_compaction_filter(opts.skip_value_in_compaction_filter) {
+    if (blob_file_delta_compression != kNoDeltaCompression && feature_index_table != nullptr) {
+      feature_index_table = std::make_shared<FeatureIndexTable>(min_blob_size);
+    }
+  }
 
   uint64_t min_blob_size;
 
   CompressionType blob_file_compression;
 
   DeltaCompressType blob_file_delta_compression;
+
+  std::shared_ptr<FeatureIndexTable> feature_index_table;
 
   uint64_t blob_file_target_size;
 

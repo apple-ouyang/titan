@@ -3,7 +3,6 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/write_batch_base.h"
-#include "titan/options.h"
 #include "util.h"
 #include "util/mutexlock.h"
 #include "util/xxhash.h"
@@ -45,6 +44,21 @@ const feature_t k1_128RatioMask = 0x0000400303410000;
 const feature_t k1_4RatioMask = 0x0000000100000001;
 
 #define FIX_TRANSFORM_ARGUMENT_TO_KEEP_SAME_SIMILARITY_DETECTION_BETWEEN_TESTS
+
+// Similar records can be delta compressed.
+// It needs two records to compress, a base record, and a record to be
+// compressed to delta. The delta is based on the baes record, using COPY ADD
+// method to show the difference between the delta and base
+// speed:               edelta > gdelta > xdelta
+// compression ratio:   gdelta > xdelta > edelta
+// default:             kNoDeltaCompression
+// recommend:           kGdelta
+enum DeltaCompressType : uint8_t {
+  kNoDeltaCompression = 0,
+  kXDelta = 1, // traditional delta compression algorithm
+  kEDelta = 2, // fastest but also low compression ratio
+  kGDelta = 3  // faster and higher compression ratio than Xdelta
+};
 
 class FeatureGenerator {
 public:
@@ -96,10 +110,11 @@ private:
 
 class FeatureIndexTable {
 public:
-  FeatureIndexTable(){};
-  FeatureIndexTable(feature_t sample_mask, size_t feature_number,
-                    size_t super_feature_number)
-      : feature_generator_(sample_mask, feature_number, super_feature_number){};
+  FeatureIndexTable(uint64_t min_blob_size) : min_blob_size_(min_blob_size){};
+  FeatureIndexTable(uint64_t min_blob_size, feature_t sample_mask,
+                    size_t feature_number, size_t super_feature_number)
+      : feature_generator_(sample_mask, feature_number, super_feature_number),
+        min_blob_size_(min_blob_size){};
 
   // generate the super features of the value
   // index the key-feature
@@ -125,6 +140,7 @@ private:
   unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;
   map<string, SuperFeatures> key_feature_table_;
   FeatureGenerator feature_generator_;
+  uint64_t min_blob_size_;
 
   void ExecuteDelete(const string &key, const SuperFeatures &super_features);
 
@@ -151,9 +167,6 @@ bool DeltaCompress(DeltaCompressType type, const Slice &input,
 
 Status DeltaUncompress(DeltaCompressType type, const Slice &delta,
                        const Slice &base, OwnedSlice *output);
-
-// TODO(haitao)：可能可以放到 column family 里面
-extern FeatureIndexTable feature_index_table;
 
 } // namespace titandb
 } // namespace rocksdb

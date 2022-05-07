@@ -264,7 +264,7 @@ Status TitanDBImpl::OpenImpl(const std::vector<TitanCFDescriptor>& descs,
   // Descriptors for actually open DB.
   std::vector<ColumnFamilyDescriptor> base_descs;
   std::vector<std::shared_ptr<TitanTableFactory>> titan_table_factories;
-  for (auto& desc : descs) {
+  for (const auto& desc : descs) {
     base_descs.emplace_back(desc.name, desc.options);
     ColumnFamilyOptions& cf_opts = base_descs.back().options;
     // Disable compactions before everything is initialized.
@@ -571,11 +571,10 @@ Status TitanDBImpl::Put(const rocksdb::WriteOptions& options,
     Status s = db_->Put(options, column_family, key, value);
     if(!s.ok()) 
       return s;
-    DeltaCompressType type =
-        cf_info_[column_family->GetID()]
-            .immutable_cf_options.blob_file_delta_compression;
-    if(type != kNoDeltaCompression)
-      feature_index_table.Put(key, value);
+    const auto &table = cf_info_[column_family->GetID()]
+                            .immutable_cf_options.feature_index_table;
+    if (table != nullptr)
+      table->Put(key, value);
     return s;
   }
 }
@@ -598,11 +597,10 @@ Status TitanDBImpl::Write(const rocksdb::WriteOptions& options,
 Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
                            rocksdb::ColumnFamilyHandle* column_family,
                            const rocksdb::Slice& key) {
-  DeltaCompressType type =
-      cf_info_[column_family->GetID()]
-          .immutable_cf_options.blob_file_delta_compression;
-  if (type != kNoDeltaCompression)
-    feature_index_table.Delete(key.ToString());
+  const auto &table =
+      cf_info_[column_family->GetID()].immutable_cf_options.feature_index_table;
+  if (table != nullptr)
+    table->Delete(key.ToString());
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 

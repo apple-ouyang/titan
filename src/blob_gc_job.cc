@@ -359,7 +359,8 @@ Status BlobGCJob::DoRunGC() {
     //             并做一个对比测试，看是否能压缩更多相似数据
     if (delta_compress_type != kNoDeltaCompression && !is_delta_records) {
       vector<string> similar_keys;
-      feature_index_table.GetSimilarRecordsKeys(blob_record.key, similar_keys);
+      const auto& table = blob_gc_->titan_cf_options().feature_index_table;
+      table->GetSimilarRecordsKeys(blob_record.key, similar_keys);
       if (similar_keys.size() > 0) {
         vector<BlobIndex> deltas_indexes;
         s = DeltaCompressRecords(blob_record.value, similar_keys, deltas_keys,

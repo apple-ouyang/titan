@@ -610,7 +610,9 @@ public:
   }
 
   void GetSimilarRecords() override {
-    max_similar_records_ = feature_index_table.CountAllSimilarRecords();
+    const auto &table =
+        tdb_->cf_info_[0].immutable_cf_options.feature_index_table;
+    max_similar_records_ = table->CountAllSimilarRecords();
   }
 
   void TestWikipedia() {
@@ -648,7 +650,7 @@ class ResemblenceDetectionTest
 public:
   ResemblenceDetectionTest()
       : DataReader(100),
-        table_(get<0>(GetParam()), get<1>(GetParam()), get<2>(GetParam())){};
+        table_(0, get<0>(GetParam()), get<1>(GetParam()), get<2>(GetParam())){};
 
   void ExecutePut(const string &key, const string &value) override {
     table_.Put(key, value);

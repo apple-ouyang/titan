@@ -9,7 +9,6 @@
 #include "db_impl.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
-#include "titan/options.h"
 #include "titan_stats.h"
 #include "version_edit.h"
 #include <cstdint>

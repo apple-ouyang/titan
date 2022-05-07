@@ -16,9 +16,6 @@
 
 namespace rocksdb {
 namespace titandb {
-
-FeatureIndexTable feature_index_table;
-
 void FeatureIndexTable::Delete(const string &key) {
   MutexLock l(&mutex_);
   SuperFeatures super_features;
@@ -50,6 +47,13 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
 }
 
 void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
+  if (value.size() < min_blob_size_){
+    // Delta compression is happend in GC. GC only process records in blob file.
+    // Only records whose value size > min_blob_size_ will store in blob file.
+    // So we just need to store those big value records' feature
+    return;
+  }
+    
   const string k = key.ToString();
   SuperFeatures super_features;
   // delete old feature if it exits so we can insert a new one
