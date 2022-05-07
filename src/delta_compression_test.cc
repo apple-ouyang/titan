@@ -378,7 +378,6 @@ public:
     options_.dirname = dbname_ + "/titandb";
     options_.create_if_missing = true;
     options_.disable_background_gc = true;
-    options_.min_blob_size = 0;
     options_.disable_auto_compactions = true;
     options_.env->CreateDirIfMissing(dbname_);
     options_.env->CreateDirIfMissing(options_.dirname);
@@ -678,10 +677,10 @@ TEST_P(DeltaCompressionTest, StackOverFlowComment) {
   TestStackOverFlowComment();
 }
 
-INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+INSTANTIATE_TEST_SUITE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
                         ::testing::Values(kGDelta, kXDelta, kEDelta));
 
-// INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized,
+// INSTANTIATE_TEST_SUITE_P(DeltaCompressionTestParameterized,
 // DeltaCompressionTest,
 //                         ::testing::Values(kGDelta));
 
@@ -694,7 +693,7 @@ INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
 
 typedef tuple<feature_t, size_t, size_t> TableParameters;
 
-// INSTANTIATE_TEST_CASE_P(
+// INSTANTIATE_TEST_SUITE_P(
 //     ResemblenceDetectionTestParameterized, ResemblenceDetectionTest,
 //     ::testing::Values(TableParameters(k1_128RatioMask, 12, 3),
 //                       TableParameters(k1_4RatioMask, 12, 3)

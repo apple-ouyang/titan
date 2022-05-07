@@ -602,7 +602,7 @@ Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
       cf_info_[column_family->GetID()]
           .immutable_cf_options.blob_file_delta_compression;
   if (type != kNoDeltaCompression)
-    feature_index_table.Delete(key);
+    feature_index_table.Delete(key.ToString());
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 
