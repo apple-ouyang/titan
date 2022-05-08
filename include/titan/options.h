@@ -222,7 +222,8 @@ struct ImmutableTitanCFOptions {
         merge_small_file_threshold(opts.merge_small_file_threshold),
         level_merge(opts.level_merge),
         skip_value_in_compaction_filter(opts.skip_value_in_compaction_filter) {
-    if (blob_file_delta_compression != kNoDeltaCompression && feature_index_table != nullptr) {
+    if (blob_file_delta_compression != kNoDeltaCompression &&
+        feature_index_table == nullptr) {
       feature_index_table = std::make_shared<FeatureIndexTable>(min_blob_size);
     }
   }
