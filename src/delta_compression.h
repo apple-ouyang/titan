@@ -24,8 +24,7 @@ using std::unordered_set;
 using std::vector;
 
 typedef uint64_t feature_t;
-typedef XXH64_hash_t super_feature_t;
-typedef vector<super_feature_t> SuperFeatures;
+typedef vector<feature_t> SuperFeatures;
 
 // The Mask has X bits of 1's, so the sample rate is 1/(2^X). It means the
 // number of sampled chunks to generate feature will be 1/(2^X) of the all
@@ -92,12 +91,13 @@ private:
    * @description: Divide the features into kSuperFeatureNumber groups. Use
    * xxhash on each groups of feature to generate hash value as super feature.
    */
-  SuperFeatures MakeSuperFeatures();
-  SuperFeatures GroupFeaturesAsSuperFeatures();
-  SuperFeatures CopyFeaturesAsSuperFeatures();
+  void MakeSuperFeatures();
+  void GroupFeaturesAsSuperFeatures();
+  void CopyFeaturesAsSuperFeatures();
   void CleanFeatures();
 
   vector<feature_t> features_;
+  SuperFeatures super_features_;
   vector<feature_t> random_transform_args_a_;
   vector<feature_t> random_transform_args_b_;
 
@@ -116,13 +116,12 @@ public:
       : feature_generator_(sample_mask, feature_number, super_feature_number),
         min_blob_size_(min_blob_size){};
 
-  // generate the super features of the value
-  // index the key-feature
+  // Generate the super features of the value and index the key-feature
   void Put(const Slice &key, const Slice &value);
 
   // Delete (key, feature_number of super feature) pair and
   // feature_number of (super feature, key) pairs
-  void Delete(const string &key);
+  void DeleteIfExist(const string &key);
 
   void RangeDelete(const Slice &start, const Slice &end);
 
@@ -137,7 +136,7 @@ public:
 
 private:
   mutable port::Mutex mutex_;
-  unordered_map<super_feature_t, unordered_set<string>> feature_key_table_;
+  unordered_map<feature_t, unordered_set<string>> feature_key_table_;
   map<string, SuperFeatures> key_feature_table_;
   FeatureGenerator feature_generator_;
   uint64_t min_blob_size_;

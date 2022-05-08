@@ -16,7 +16,7 @@
 
 namespace rocksdb {
 namespace titandb {
-void FeatureIndexTable::Delete(const string &key) {
+void FeatureIndexTable::DeleteIfExist(const string &key) {
   MutexLock l(&mutex_);
   SuperFeatures super_features;
   if (GetSuperFeatures(key, &super_features)) {
@@ -26,7 +26,7 @@ void FeatureIndexTable::Delete(const string &key) {
 
 void FeatureIndexTable::ExecuteDelete(const string &key,
                                       const SuperFeatures &super_features) {
-  for (const super_feature_t &sf : super_features) {
+  for (const auto &sf : super_features) {
     feature_key_table_[sf].erase(key);
   }
   key_feature_table_.erase(key);
@@ -39,8 +39,8 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
   for (auto key_feature = it_start; key_feature != it_end; ++key_feature) {
     auto key = key_feature->first;
     auto super_features = key_feature->second;
-    for (const super_feature_t &f : super_features) {
-      feature_key_table_[f].erase(key);
+    for (const auto &sf : super_features) {
+      feature_key_table_[sf].erase(key);
     }
   }
   key_feature_table_.erase(it_start, it_end);
@@ -56,15 +56,15 @@ void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
     
   const string k = key.ToString();
   SuperFeatures super_features;
-  // delete old feature if it exits so we can insert a new one
-  Delete(k);
+  // replace old feature with a new feature
+  DeleteIfExist(k);
 
   super_features = feature_generator_.GenerateSuperFeatures(value);
 
   {
     MutexLock l(&mutex_);
     key_feature_table_[k] = super_features;
-    for (const super_feature_t &sf : super_features) {
+    for (const auto &sf : super_features) {
       feature_key_table_[sf].insert(k);
     }
   }
@@ -118,7 +118,7 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
       return;
     }
 
-    for (const super_feature_t &sf : super_features) {
+    for (const auto &sf : super_features) {
       for (string similar_key : feature_key_table_[sf]) {
         if (similar_key != k) {
           similar_keys.emplace_back(move(similar_key));
@@ -128,9 +128,9 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
   }
 
   for (const string &similar_key : similar_keys) {
-    Delete(similar_key);
+    DeleteIfExist(similar_key);
   }
-  Delete(k);
+  DeleteIfExist(k);
 }
 
 FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
@@ -174,39 +174,37 @@ void FeatureGenerator::OdessResemblanceDetect(const Slice &value) {
   }
 }
 
-SuperFeatures FeatureGenerator::MakeSuperFeatures() {
+void FeatureGenerator::MakeSuperFeatures() {
   if (kSuperFeatureNumber == kFeatureNumber)
-    return CopyFeaturesAsSuperFeatures();
+    CopyFeaturesAsSuperFeatures();
   else
-    return GroupFeaturesAsSuperFeatures();
+    GroupFeaturesAsSuperFeatures();
 }
 
-SuperFeatures FeatureGenerator::CopyFeaturesAsSuperFeatures() {
-  SuperFeatures super_features(features_.begin(), features_.end());
-  return super_features;
+void FeatureGenerator::CopyFeaturesAsSuperFeatures() {
+  super_features_ = features_;
 }
 
 // Divede features into groups, then use the group hash as the super feature
-SuperFeatures FeatureGenerator::GroupFeaturesAsSuperFeatures() {
+void FeatureGenerator::GroupFeaturesAsSuperFeatures() {
+  super_features_.resize(kSuperFeatureNumber);
   SuperFeatures super_features(kSuperFeatureNumber);
   for (size_t i = 0; i < kSuperFeatureNumber; ++i) {
     size_t group_len = kFeatureNumber / kSuperFeatureNumber;
-    super_features[i] = XXH64(&features_[i * group_len],
+    super_features_[i] = XXH64(&features_[i * group_len],
                               sizeof(feature_t) * group_len, 0x7fcaf1);
   }
-  return super_features;
 }
 
 void FeatureGenerator::CleanFeatures() {
-  for (size_t i = 0; i < kFeatureNumber; ++i) {
-    features_[i] = 0;
-  }
+  std::fill(features_.begin(), features_.end(), 0);
 }
 
 SuperFeatures FeatureGenerator::GenerateSuperFeatures(const Slice &value) {
   CleanFeatures();
   OdessResemblanceDetect(value);
-  return MakeSuperFeatures();
+  MakeSuperFeatures();
+  return super_features_;
 }
 
 bool XDelta_Compress(const char *input, size_t input_len, const char *base,
