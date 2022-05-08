@@ -121,7 +121,7 @@ public:
 
   // Delete (key, feature_number of super feature) pair and
   // feature_number of (super feature, key) pairs
-  void DeleteIfExist(const string &key);
+  void Delete(const Slice &key);
 
   void RangeDelete(const Slice &start, const Slice &end);
 
@@ -140,6 +140,8 @@ private:
   map<string, SuperFeatures> key_feature_table_;
   FeatureGenerator feature_generator_;
   uint64_t min_blob_size_;
+
+  void DeleteIfExist(const string &key);
 
   void ExecuteDelete(const string &key, const SuperFeatures &super_features);
 

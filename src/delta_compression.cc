@@ -16,8 +16,35 @@
 
 namespace rocksdb {
 namespace titandb {
-void FeatureIndexTable::DeleteIfExist(const string &key) {
+void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
+  if (value.size() < min_blob_size_) {
+    // Delta compression is happend in GC. GC only process records in blob file.
+    // Only records whose value size >= min_blob_size_ will store in blob file.
+    // So we just need to store those big value records' feature
+    return;
+  }
+
+  const string k = key.ToString();
+  SuperFeatures super_features;
   MutexLock l(&mutex_);
+
+  // replace old feature with a new feature
+  DeleteIfExist(k);
+
+  super_features = feature_generator_.GenerateSuperFeatures(value);
+
+  key_feature_table_[k] = super_features;
+  for (const auto &sf : super_features) {
+    feature_key_table_[sf].insert(k);
+  }
+}
+
+void FeatureIndexTable::Delete(const Slice &key) {
+  MutexLock l(&mutex_);
+  DeleteIfExist(key.ToString());
+}
+
+void FeatureIndexTable::DeleteIfExist(const string &key) {
   SuperFeatures super_features;
   if (GetSuperFeatures(key, &super_features)) {
     ExecuteDelete(key, super_features);
@@ -44,30 +71,6 @@ void FeatureIndexTable::RangeDelete(const Slice &start, const Slice &end) {
     }
   }
   key_feature_table_.erase(it_start, it_end);
-}
-
-void FeatureIndexTable::Put(const Slice &key, const Slice &value) {
-  if (value.size() < min_blob_size_){
-    // Delta compression is happend in GC. GC only process records in blob file.
-    // Only records whose value size > min_blob_size_ will store in blob file.
-    // So we just need to store those big value records' feature
-    return;
-  }
-    
-  const string k = key.ToString();
-  SuperFeatures super_features;
-  // replace old feature with a new feature
-  DeleteIfExist(k);
-
-  super_features = feature_generator_.GenerateSuperFeatures(value);
-
-  {
-    MutexLock l(&mutex_);
-    key_feature_table_[k] = super_features;
-    for (const auto &sf : super_features) {
-      feature_key_table_[sf].insert(k);
-    }
-  }
 }
 
 // Status FeatureIndexTable::Write(WriteBatch *updates) {
@@ -111,18 +114,16 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
 
   SuperFeatures super_features;
   const string k = key.ToString();
-  
-  {
-    MutexLock l(&mutex_);
-    if (!GetSuperFeatures(k, &super_features)) {
-      return;
-    }
 
-    for (const auto &sf : super_features) {
-      for (string similar_key : feature_key_table_[sf]) {
-        if (similar_key != k) {
-          similar_keys.emplace_back(move(similar_key));
-        }
+  MutexLock l(&mutex_);
+  if (!GetSuperFeatures(k, &super_features)) {
+    return;
+  }
+
+  for (const auto &sf : super_features) {
+    for (const string &similar_key : feature_key_table_[sf]) {
+      if (similar_key != k) {
+        similar_keys.push_back(similar_key);
       }
     }
   }
@@ -130,7 +131,7 @@ void FeatureIndexTable::GetSimilarRecordsKeys(const Slice &key,
   for (const string &similar_key : similar_keys) {
     DeleteIfExist(similar_key);
   }
-  DeleteIfExist(k);
+  ExecuteDelete(k, super_features);
 }
 
 FeatureGenerator::FeatureGenerator(feature_t sample_mask, size_t feature_number,
@@ -192,7 +193,7 @@ void FeatureGenerator::GroupFeaturesAsSuperFeatures() {
   for (size_t i = 0; i < kSuperFeatureNumber; ++i) {
     size_t group_len = kFeatureNumber / kSuperFeatureNumber;
     super_features_[i] = XXH64(&features_[i * group_len],
-                              sizeof(feature_t) * group_len, 0x7fcaf1);
+                               sizeof(feature_t) * group_len, 0x7fcaf1);
   }
 }
 

@@ -600,7 +600,7 @@ Status TitanDBImpl::Delete(const rocksdb::WriteOptions& options,
   const auto &table =
       cf_info_[column_family->GetID()].immutable_cf_options.feature_index_table;
   if (table != nullptr)
-    table->Delete(key.ToString());
+    table->Delete(key);
   return HasBGError() ? GetBGError() : db_->Delete(options, column_family, key);
 }
 
