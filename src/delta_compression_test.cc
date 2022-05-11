@@ -384,6 +384,7 @@ public:
     options_.blob_file_delta_compression = GetParam();
     options_.min_gc_batch_size = 0;
     options_.statistics = CreateDBStatistics();
+    options_.blob_file_compression = kSnappyCompression;
   }
 
   ~DeltaCompressionTest() { Close(); }
@@ -524,7 +525,7 @@ public:
 
   void PrintProcedure(const size_t gc_files, const size_t number_of_files) {
     double ratio = (double)gc_files / number_of_files;
-    printf("\r%.2f%% GC complete\n", ratio * 100);
+    printf("\r%.2f%% GC complete", ratio * 100);
   }
 
   // TODO unifiy this and TitanDBImpl::TEST_StartGC
@@ -542,8 +543,8 @@ public:
     auto *cfh = base_db_->DefaultColumnFamily();
 
     // Build BlobGC
-    TitanDBOptions db_options = options_;
-    TitanCFOptions cf_options = options_;
+    TitanDBOptions db_options = tdb_->db_options_;
+    TitanCFOptions cf_options = TitanCFOptions(options_, tdb_->cf_info_[0].immutable_cf_options, tdb_->cf_info_[0].mutable_cf_options) ;
     LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL, db_options.info_log.get());
 
     size_t number_of_files;
@@ -645,7 +646,7 @@ public:
 };
 
 class ResemblenceDetectionTest
-    : public testing::TestWithParam<tuple<super_feature_t, size_t, size_t>>,
+    : public testing::TestWithParam<tuple<feature_t, size_t, size_t>>,
       public DataReader {
 public:
   ResemblenceDetectionTest()
