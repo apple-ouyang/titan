@@ -131,21 +131,26 @@ if (WITH_TITAN_TESTS AND (NOT CMAKE_BUILD_TYPE STREQUAL "Release"))
         titan_options_test
         util_test
         compaction_filter_test
-        version_test
-        delta_compression_test)
+        version_test)
   set(TEST_LIBS
         ${COMMON_LIBS}
         testutillib
-        gtest
-        boost_filesystem
-        boost_system
-        pthread)
+        gtest)
 
   foreach(test ${TESTS})
     add_executable(titan_${test} src/${test}.cc $<TARGET_OBJECTS:testharness>)
       target_link_libraries(titan_${test} ${TEST_LIBS})
       add_test(titan_${test} titan_${test})
   endforeach(test ${TESTS})
+
+  add_executable(titan_delta_compression_bench src/delta_compression_bench.cc
+                                               $<TARGET_OBJECTS:testharness>)
+  target_link_libraries(
+    titan_delta_compression_bench
+    ${TEST_LIBS}
+    boost_filesystem
+    boost_system
+    pthread)
 endif()
 
 if (WITH_TITAN_TOOLS)

@@ -378,13 +378,11 @@ public:
     options_.dirname = dbname_ + "/titandb";
     options_.create_if_missing = true;
     options_.disable_background_gc = true;
-    options_.disable_auto_compactions = true;
     options_.env->CreateDirIfMissing(dbname_);
     options_.env->CreateDirIfMissing(options_.dirname);
     options_.blob_file_delta_compression = GetParam();
     options_.min_gc_batch_size = 0;
     options_.statistics = CreateDBStatistics();
-    options_.blob_file_compression = kSnappyCompression;
   }
 
   ~DeltaCompressionTest() { Close(); }
@@ -680,7 +678,7 @@ TEST_P(DeltaCompressionTest, StackOverFlowComment) {
   TestStackOverFlowComment();
 }
 
-INSTANTIATE_TEST_SUITE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
+INSTANTIATE_TEST_CASE_P(DeltaCompressionTestParameterized, DeltaCompressionTest,
                         ::testing::Values(kGDelta, kXDelta, kEDelta));
 
 // INSTANTIATE_TEST_SUITE_P(DeltaCompressionTestParameterized,
