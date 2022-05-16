@@ -380,8 +380,19 @@ public:
     options_.disable_background_gc = true;
     options_.env->CreateDirIfMissing(dbname_);
     options_.env->CreateDirIfMissing(options_.dirname);
+
+    // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+    options_.IncreaseParallelism();
+    options_.OptimizeLevelStyleCompaction();
+
     options_.blob_file_delta_compression = GetParam();
+
+    // All value are stored in the blob, so they can be GC and delta compressed.
+    options_.min_blob_size = 0;
+
+    // make sure gc all records
     options_.min_gc_batch_size = 0;
+    
     options_.statistics = CreateDBStatistics();
   }
 
@@ -496,9 +507,8 @@ public:
       printf(
           "| method  | compress fail | compress success | delta size | delta "
           "after size | delta compress ratio | compress time |\n");
-      printf(
-          "| ------- | ------------- | ---------------- | ---------- | "
-          "---------------- | -------------------- | ------------- |\n");
+      printf("| ------- | ------------- | ---------------- | ---------- | "
+             "---------------- | -------------------- | ------------- |\n");
       printf("| %s\t | %zu\t | %zu\t | %s\t | %s\t | %.2f\t | "
              "%.2fs\t |\n",
              method.c_str(), fail_number, compressed_number,
@@ -542,7 +552,9 @@ public:
 
     // Build BlobGC
     TitanDBOptions db_options = tdb_->db_options_;
-    TitanCFOptions cf_options = TitanCFOptions(options_, tdb_->cf_info_[0].immutable_cf_options, tdb_->cf_info_[0].mutable_cf_options) ;
+    TitanCFOptions cf_options =
+        TitanCFOptions(options_, tdb_->cf_info_[0].immutable_cf_options,
+                       tdb_->cf_info_[0].mutable_cf_options);
     LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL, db_options.info_log.get());
 
     size_t number_of_files;
